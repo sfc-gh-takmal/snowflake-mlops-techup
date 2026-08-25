@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="snowflake-source" content="cortex-agent-authored" />
+  <title>MLOps on Snowflake | End-to-End ML Operations Framework</title>
+  <script type="application/json" id="snowflake-report-metadata">
+  {
+    "generated": "2026-08-10",
+    "intent": "Production-ready MLOps framework documentation — covers what MLOps is, Snowflake ML capabilities, Task DAG orchestration (Python SDK), ML Jobs (@remote), Feature Store, Model Registry, batch and real-time inference, Gateway deployment, CI/CD pipeline, model monitoring, rollback, and RBAC",
+    "sections": [
+      { "id": "overview", "title": "Overview", "producerNotes": "What is MLOps, Snowflake ML capabilities table, framework positioning, pipeline flow diagram, environment layout" },
+      { "id": "task-dag", "title": "Task DAG Orchestration", "producerNotes": "Python SDK DAG, configurable compute per step, ML Jobs vs warehouse" },
+      { "id": "feature-store", "title": "Feature Store", "producerNotes": "Dynamic Tables, entity registration, versioning, refresh strategies" },
+      { "id": "model-training", "title": "Model Training", "producerNotes": "ML Jobs with @remote, cloudpickle, XGBoost, cross-validation" },
+      { "id": "model-registry", "title": "Model Registry", "producerNotes": "Auto-versioning, quality gate, registration, conda deps" },
+      { "id": "inference", "title": "Inference", "producerNotes": "Warehouse-based batch, SPCS services, Gateway blue/green" },
+      { "id": "monitoring", "title": "Model Monitoring", "producerNotes": "ML Observability, CREATE MODEL MONITOR, data flow, drift detection, lifecycle" },
+      { "id": "experiment-tracking", "title": "Experiment Tracking", "producerNotes": "ExperimentTracking API, log_params, log_metrics, run management" },
+      { "id": "cicd", "title": "CI/CD Pipeline", "producerNotes": "deploy.yml stages, pr-checks, OIDC, approval gate, release tagging" },
+      { "id": "rollback", "title": "Rollback", "producerNotes": "Manual workflow, version revert, service redeploy" },
+      { "id": "rbac", "title": "RBAC & Security", "producerNotes": "MLOPS_DEPLOY_ROLE, service users, network policy, branch protection" },
+      { "id": "config", "title": "Configuration", "producerNotes": "config.py structure, compute mode, thresholds, deployment toggles" }
+    ]
+  }
+  </script>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      max-width: 880px; margin: 0 auto; padding: 48px 24px 48px 280px;
+      color: light-dark(#222, #e0e0e0);
+      background: light-dark(#fff, #0F1B2D);
+      line-height: 1.75;
+      font-size: 16px;
+    }
+    /* Fixed left sidebar nav */
+    .sidebar {
+      position: fixed; top: 0; left: 0;
+      width: 250px; height: 100vh;
+      overflow-y: auto;
+      padding: 24px 16px;
+      background: light-dark(#f8fafc, #091420);
+      border-right: 1px solid light-dark(#e2e8f0, #1e3a5f);
+      z-index: 100;
+    }
+    .sidebar-title {
+      font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.05em; color: light-dark(#11567F, #29B5E8);
+      margin: 0 0 12px 0; padding: 0;
+    }
+    .sidebar-list { list-style: none; padding: 0; margin: 0; }
+    .sidebar-list li { margin: 0; }
+    .sidebar-list a {
+      display: block; padding: 6px 10px; border-radius: 6px;
+      font-size: 0.88em; color: light-dark(#333, #ccc);
+      text-decoration: none; line-height: 1.4;
+    }
+    .sidebar-list a:hover {
+      background: light-dark(#e2e8f0, #1e3a5f);
+      color: light-dark(#11567F, #29B5E8);
+      text-decoration: none;
+    }
+    .back-to-top {
+      position: fixed; bottom: 24px; right: 24px;
+      width: 40px; height: 40px; border-radius: 50%;
+      background: #29B5E8; color: #fff;
+      border: none; cursor: pointer;
+      font-size: 1.2em; line-height: 40px; text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 100; text-decoration: none;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .back-to-top:hover { background: #11567F; text-decoration: none; }
+    @media (max-width: 900px) {
+      .sidebar { position: static; width: 100%; height: auto; border-right: none; border-bottom: 1px solid light-dark(#e2e8f0, #1e3a5f); }
+      body { padding: 24px 16px; max-width: 100%; }
+    }
+    h1 { font-size: 2rem; font-weight: 700; margin: 0 0 8px; color: light-dark(#111, #f0f0f0); }
+    h2 { font-size: 1.5rem; font-weight: 700; margin: 56px 0 18px; color: light-dark(#111, #f0f0f0); padding-bottom: 10px; border-bottom: 2px solid light-dark(#e2e8f0, #1e3a5f); }
+    h3 { font-size: 1.15rem; font-weight: 600; margin: 36px 0 12px; color: light-dark(#111, #e0e0e0); }
+    h4 { font-size: 1rem; font-weight: 600; margin: 24px 0 8px; color: light-dark(#333, #ccc); }
+    p { margin: 14px 0; }
+    a { color: light-dark(#11567F, #29B5E8); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace; background: light-dark(#f0f0f0, #2a2a3e); padding: 2px 6px; border-radius: 4px; font-size: 0.87em; }
+    pre { background: light-dark(#f5f7fa, #0a1420); border: 1px solid light-dark(#e0e0e0, #1e3a5f); padding: 16px 18px; overflow-x: auto; font-size: 0.85em; line-height: 1.55; border-radius: 8px; }
+    pre code { background: none; padding: 0; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.92em; }
+    th, td { border: 1px solid light-dark(#e0e0e0, #444); padding: 10px 14px; text-align: left; vertical-align: top; }
+    th { background: light-dark(#EDF7FC, #11293D); font-weight: 600; }
+    .note { background: light-dark(#EDF7FC, #0F1B2D); border-left: 4px solid #29B5E8; border-radius: 8px; padding: 16px 20px; margin: 20px 0; }
+    .note strong { display: block; margin-bottom: 6px; font-weight: 700; color: light-dark(#111, #e0e0e0); }
+    .subtitle { color: light-dark(#555, #aaa); font-size: 1.05rem; margin-bottom: 32px; }
+    .diagram { background: light-dark(#f8fafc, #1e1e30); border: 1px solid light-dark(#e2e8f0, #333); border-radius: 8px; padding: 20px; margin: 20px 0; font-family: 'SF Mono', monospace; font-size: 0.85em; line-height: 1.6; white-space: pre; overflow-x: auto; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 600; }
+    .badge-spcs { background: light-dark(#E0F4FC, #0F2A3D); color: light-dark(#11567F, #29B5E8); }
+    .badge-wh { background: light-dark(#E8F5E9, #1a3a2a); color: light-dark(#166534, #86efac); }
+
+    /* Workflow diagram — card-based S-pattern */
+    .workflow-diagram { margin: 28px -24px 36px; padding: 0 24px; overflow-x: auto; }
+    .wf-row { display: flex; align-items: stretch; gap: 10px; margin: 0; flex-wrap: nowrap; }
+    .wf-row-reverse { flex-direction: row-reverse; }
+    .wf-row-final { align-items: stretch; }
+    .wf-card {
+      flex: 1 1 0; min-width: 0;
+      background: light-dark(#f8fafc, #0F1B2D);
+      border: 1px solid light-dark(#e2e8f0, #1e3a5f);
+      border-radius: 10px; padding: 14px 16px;
+      display: flex; flex-direction: column;
+      overflow-wrap: break-word; word-break: break-word;
+    }
+    .wf-card code { font-size: 0.82em; word-break: break-all; }
+    .wf-card-approval {
+      flex: 1 1 0;
+      background: light-dark(#FFFDF5, #1a1a0f);
+      border: 2px dashed light-dark(#E8A317, #92700c);
+    }
+    .wf-card-prod {
+      flex: 1.8 1 0;
+      background: light-dark(#F0FDF9, #0a1f1a);
+      border: 2px dashed light-dark(#11567F, #29B5E8);
+    }
+    .wf-num {
+      display: inline-block; width: 28px; height: 28px; line-height: 28px;
+      border-radius: 50%; text-align: center;
+      background: #29B5E8;
+      color: #fff; font-size: 0.72em; font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .wf-card-approval .wf-num { background: #E8A317; }
+    .wf-card-prod .wf-num { background: #11567F; }
+    .wf-title { font-weight: 700; font-size: 0.88em; margin-bottom: 4px; color: light-dark(#111, #f0f0f0); }
+    .wf-desc { font-size: 0.78em; color: light-dark(#555, #aaa); line-height: 1.45; flex: 1; }
+    .wf-desc-list { font-size: 0.78em; color: light-dark(#555, #aaa); line-height: 1.45; }
+    .wf-desc-list ul { margin: 4px 0 0 16px; padding: 0; }
+    .wf-desc-list li { margin: 2px 0; }
+    .wf-arrow { font-size: 1.3em; color: light-dark(#94a3b8, #4a6a8a); flex-shrink: 0; padding: 0 2px; display: flex; align-items: center; }
+    .wf-arrow-left { transform: scaleX(1); }
+    .wf-row-connector { font-size: 1.3em; color: light-dark(#94a3b8, #4a6a8a); padding: 6px 0; margin: 0; line-height: 1; }
+    .wf-connector-right { text-align: right; padding-right: 40px; }
+    .wf-connector-left { text-align: left; padding-left: 40px; }
+    /* Syntax highlighting */
+    .hljs { background: transparent !important; padding: 0; }
+    .hl-kw { color: light-dark(#11567F, #29B5E8); font-weight: 600; }
+    .hl-str { color: light-dark(#22863a, #7ee787); }
+    .hl-cm { color: light-dark(#6a737d, #8b949e); font-style: italic; }
+    .hl-fn { color: light-dark(#6f42c1, #d2a8ff); }
+    .hl-num { color: light-dark(#005cc5, #79c0ff); }
+    .hl-dec { color: light-dark(#e36209, #ffa657); }
+    .hl-op { color: light-dark(#d73a49, #ff7b72); }
+  </style>
+  <link rel="stylesheet" href="/libs/highlight.js@11.10.0/github.min.css">
+</head>
+<body>
+
+  <nav class="sidebar">
+    <p class="sidebar-title">Contents</p>
+    <ul class="sidebar-list">
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#task-dag">Task DAG Orchestration</a></li>
+      <li><a href="#feature-store">Feature Store</a></li>
+      <li><a href="#model-training">Model Training</a></li>
+      <li><a href="#model-registry">Model Registry</a></li>
+      <li><a href="#inference">Inference</a></li>
+      <li><a href="#monitoring">Model Monitoring</a></li>
+      <li><a href="#experiment-tracking">Experiment Tracking</a></li>
+      <li><a href="#cicd">CI/CD Pipeline</a></li>
+      <li><a href="#rollback">Rollback</a></li>
+      <li><a href="#rbac">RBAC &amp; Security</a></li>
+      <li><a href="#config">Configuration</a></li>
+    </ul>
+  </nav>
+
+  <h1 id="top">MLOps on Snowflake</h1>
+  <p class="subtitle">End-to-End Machine Learning Operations Framework</p>
+
+  <h2 id="overview">Overview</h2>
+
+  <h3>What is MLOps?</h3>
+  <p>MLOps (Machine Learning Operations) is the set of practices that combines ML system development with reliable deployment and ongoing operations. It bridges the gap between data science experimentation and production-grade ML systems by standardizing how models are trained, validated, deployed, monitored, and retrained over time.</p>
+
+  <p>In practice, MLOps solves several critical challenges that ML teams face when moving from notebook prototypes to production:</p>
+  <ul>
+    <li><strong>Reproducibility</strong> &mdash; every training run is tracked with parameters, metrics, and data lineage</li>
+    <li><strong>Automation</strong> &mdash; pipelines run on schedule or on code change without manual intervention</li>
+    <li><strong>Quality gates</strong> &mdash; models must pass metric thresholds before reaching production</li>
+    <li><strong>Governance</strong> &mdash; human approval required for production deployments, with full audit trail</li>
+    <li><strong>Observability</strong> &mdash; drift detection and performance monitoring catch degradation early</li>
+  </ul>
+
+  <h3>End-to-End ML on Snowflake</h3>
+  <p><a href="https://docs.snowflake.com/en/developer-guide/snowflake-ml/overview">Snowflake ML</a> provides an integrated set of capabilities for the full machine learning lifecycle &mdash; from feature engineering through model serving and monitoring &mdash; all running on top of your governed data. Key platform capabilities this framework uses:</p>
+
+  <table>
+    <thead><tr><th>Capability</th><th>Snowflake Service</th><th>What It Does</th></tr></thead>
+    <tbody>
+      <tr><td>Feature Engineering</td><td><a href="https://docs.snowflake.com/developer-guide/snowflake-ml/feature-store/overview">Feature Store</a></td><td>Dynamic Tables with incremental refresh, point-in-time correct dataset generation</td></tr>
+      <tr><td>Pipeline Orchestration</td><td><a href="https://docs.snowflake.com/en/user-guide/tasks-intro">Snowflake Tasks</a> (DAG)</td><td>Serverless or warehouse-based task graphs that schedule and sequence pipeline steps with dependencies, retries, and cron scheduling</td></tr>
+      <tr><td>ML Compute</td><td><a href="https://docs.snowflake.com/developer-guide/snowflake-ml/ml-jobs/overview">ML Jobs</a> (<code>@remote</code>)</td><td>Execute Python functions on GPU/CPU compute pools (SPCS) for training and feature engineering</td></tr>
+      <tr><td>Experiment Tracking</td><td><a href="https://docs.snowflake.com/developer-guide/snowflake-ml/experiments">Experiments</a></td><td>Log parameters, metrics, and artifacts for every training run</td></tr>
+      <tr><td>Model Management</td><td><a href="https://docs.snowflake.com/developer-guide/snowflake-ml/model-registry/overview">Model Registry</a></td><td>Versioned model storage with conda dependencies, cross-environment replication</td></tr>
+      <tr><td>Batch Inference</td><td>Model Registry <code>run()</code></td><td>Score datasets at warehouse scale using registered models</td></tr>
+      <tr><td>Real-Time Inference</td><td><a href="https://docs.snowflake.com/en/developer-guide/snowpark-container-services/overview">SPCS</a> + Gateway</td><td>Container services with blue/green deployment and zero-downtime rollouts</td></tr>
+      <tr><td>Monitoring</td><td><a href="https://docs.snowflake.com/developer-guide/snowflake-ml/model-registry/model-observability">ML Observability</a></td><td>Prediction drift, feature distribution shift, automated alerting</td></tr>
+      <tr><td>Lineage</td><td><a href="https://docs.snowflake.com/developer-guide/snowflake-ml/ml-lineage">ML Lineage</a></td><td>Trace data &rarr; features &rarr; datasets &rarr; models for reproducibility and compliance</td></tr>
+    </tbody>
+  </table>
+
+  <h3>About This Framework</h3>
+  <p>This is an <strong>open-source, production-ready template</strong> for building end-to-end ML pipelines on Snowflake. It provides starter code that data science teams can plug their own model logic into, while giving ML engineering teams a standardized process for training, validating, deploying, and monitoring models.</p>
+
+  <div class="note">
+    <strong>Extensible by design</strong>
+    The framework is intentionally modular. Swap in your own training algorithm, add new feature engineering steps, adjust quality gate thresholds, or extend the CI/CD workflows &mdash; the surrounding infrastructure (orchestration, versioning, deployment, monitoring) stays the same. Use it as a bootstrap for your MLOps workflows, or as a baseline to extend with <a href="https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code">Cortex Code</a> for agentic ML.
+  </div>
+
+  <p><strong>For data science teams:</strong> replace the training function, update feature engineering, adjust thresholds. Everything else (CI/CD, versioning, deployment, monitoring) works automatically.</p>
+  <p><strong>For ML engineering teams:</strong> standardized pipeline structure, automated CI/CD with approval gates, environment isolation (DEV &rarr; STAGE &rarr; PROD), reproducible deployments, and one-click rollback.</p>
+
+  <h3>Pipeline Flow</h3>
+  <div class="workflow-diagram">
+    <!-- Row 1: Steps 01-04 (left to right) -->
+    <div class="wf-row">
+      <div class="wf-card">
+        <div class="wf-num">01</div>
+        <div class="wf-title">Feature Engineering</div>
+        <div class="wf-desc">Dynamic Tables refresh features from raw transactions. Configurable refresh intervals via Feature Store.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num">02</div>
+        <div class="wf-title">Generate Dataset</div>
+        <div class="wf-desc">Create a versioned training dataset from the Feature View, with automatic point-in-time correctness.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num">03</div>
+        <div class="wf-title">Train Model</div>
+        <div class="wf-desc">ML Job runs XGBoost on a compute pool. Experiment tracking logs params and metrics for every run.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num">04</div>
+        <div class="wf-title">Evaluate</div>
+        <div class="wf-desc">Compute precision, recall, F1, and AUC. Compare against threshold to determine pass/fail.</div>
+      </div>
+    </div>
+
+    <!-- Connector: row 1 to row 2 -->
+    <div class="wf-row-connector wf-connector-right">&darr;</div>
+
+    <!-- Row 2: Steps 05-08 (right to left) -->
+    <div class="wf-row wf-row-reverse">
+      <div class="wf-card">
+        <div class="wf-num">08</div>
+        <div class="wf-title">Real-Time Inference</div>
+        <div class="wf-desc">Blue/green SPCS service deployment behind a Gateway. Health check before traffic shift. Autocapture enabled.</div>
+      </div>
+      <div class="wf-arrow wf-arrow-left">&larr;</div>
+      <div class="wf-card">
+        <div class="wf-num">07</div>
+        <div class="wf-title">Batch Inference</div>
+        <div class="wf-desc">Run predictions on the full dataset. Write results with timestamps to the predictions table for monitoring.</div>
+      </div>
+      <div class="wf-arrow wf-arrow-left">&larr;</div>
+      <div class="wf-card">
+        <div class="wf-num">06</div>
+        <div class="wf-title">Register Model</div>
+        <div class="wf-desc">Quality gate passes &rarr; register versioned model in STAGE registry with conda dependencies.</div>
+      </div>
+      <div class="wf-arrow wf-arrow-left">&larr;</div>
+      <div class="wf-card">
+        <div class="wf-num">05</div>
+        <div class="wf-title">Quality Gate</div>
+        <div class="wf-desc">Metrics must exceed thresholds (AUC &ge; 0.85, F1 &ge; 0.70). Fails the pipeline if not met.</div>
+      </div>
+    </div>
+
+    <!-- Connector: row 2 to row 3 -->
+    <div class="wf-row-connector wf-connector-left">&darr;</div>
+
+    <!-- Row 3: Steps 09-10 -->
+    <div class="wf-row wf-row-final">
+      <div class="wf-card wf-card-approval">
+        <div class="wf-num">09</div>
+        <div class="wf-title">Human Approval</div>
+        <div class="wf-desc">GitHub Environment protection rule requires a reviewer. Scheduled retrain creates a GitHub Issue for notification.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card wf-card-prod">
+        <div class="wf-num">10</div>
+        <div class="wf-title">PROD Deployment</div>
+        <div class="wf-desc-list">
+          <ul>
+            <li>Replicate model from STAGE to PROD</li>
+            <li>Refresh Feature Views in PROD</li>
+            <li>Run batch inference on production data</li>
+            <li>Blue/green SPCS service swap</li>
+            <li>Set up model monitoring</li>
+            <li>Create git tag <code>prod/VN-TIMESTAMP</code></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Environment Layout</h3>
+  <table>
+    <thead><tr><th>Environment</th><th>Database</th><th>Purpose</th><th>Compute Pool</th><th>Warehouse</th></tr></thead>
+    <tbody>
+      <tr><td>DEV</td><td><code>SNOW_MLOPS_DEV</code></td><td>Developer experimentation</td><td><code>SNOW_MLOPS_DEV_POOL</code></td><td><code>SNOW_MLOPS_DEV_WH</code></td></tr>
+      <tr><td>STAGE</td><td><code>SNOW_MLOPS_STAGE</code></td><td>Automated CI validation</td><td><code>SNOW_MLOPS_STAGE_POOL</code></td><td><code>SNOW_MLOPS_STAGE_WH</code></td></tr>
+      <tr><td>PROD</td><td><code>SNOW_MLOPS_PROD</code></td><td>Production serving</td><td><code>SNOW_MLOPS_PROD_POOL</code></td><td><code>SNOW_MLOPS_PROD_WH</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>Source data always resides in <code>SNOW_MLOPS_PROD.ML</code>. DEV and STAGE read from it for training but write all artifacts (features, models, results) to their own databases.</p>
+
+  <h3>Project Structure</h3>
+  <pre><code class="language-plaintext">snowflake-mlops/
+├── .github/workflows/
+│   ├── pr-checks.yml              # PR: lint + format + tests
+│   ├── deploy.yml                 # Main: lint → test → deploy-stage → deploy-prod
+│   └── rollback.yml               # Manual: rollback to previous model version
+├── deploy/                        # Promotion strategies (topology-aware)
+│   └── strategies/
+│       ├── single_account.py      # Default: cross-DB replication
+│       ├── multi_account.py       # Future: cross-account
+│       └── cross_region.py        # Future: cross-region
+├── scripts/
+│   ├── setup.sh                   # Infrastructure provisioning
+│   ├── setup_cicd.sh              # OIDC users + network policy
+│   ├── generate_dataset.py        # Synthetic fraud data
+│   ├── wait_for_task.py           # Poll task DAG completion
+│   ├── quality_gate_and_register.py  # Validate + register model
+│   ├── run_batch_inference.py     # Batch inference validation
+│   ├── deploy_prod_service.py     # PROD blue/green gateway deploy
+│   ├── setup_model_monitor.py     # Create/validate model monitor
+│   └── notify_candidate.py        # GitHub Issue for retrain candidates
+├── source/
+│   ├── config.py                  # Centralized configuration
+│   ├── snowpark_session.py        # Session helper (SSO + OIDC)
+│   ├── features/                  # Feature Store definitions
+│   ├── pipeline/
+│   │   └── ml_pipeline_dag.py     # Task DAG + ML Job functions
+│   ├── monitoring/
+│   │   └── model_monitor.py       # Model Monitor lifecycle management
+│   └── serving/
+│       └── batch_inference.py     # Batch inference utilities
+├── tests/
+│   ├── test_config.py             # Unit tests
+│   └── test_endpoint.py           # Integration tests
+└── notebooks/                     # Educational Jupyter notebooks (01-05)</code></pre>
+
+
+  <h2 id="task-dag">Task DAG Orchestration</h2>
+
+  <p>The pipeline is defined using the <strong>Python SDK</strong> (<code>snowflake.core.task.dagv1</code>) which provides a programmatic interface for creating and managing Snowflake Tasks. This approach is preferred over raw SQL because it's easier to modify, test, and integrate with CI/CD.</p>
+
+  <h3>DAG Flow</h3>
+  <div class="workflow-diagram">
+    <div class="wf-row">
+      <div class="wf-card" style="flex: 0.7 1 0;">
+        <div class="wf-num">R</div>
+        <div class="wf-title">ML_TRAINING_PIPELINE</div>
+        <div class="wf-desc">Root task. Orchestrates the DAG. Cron schedule (configurable) or triggered via <code>EXECUTE TASK</code> from CI.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num">1</div>
+        <div class="wf-title">FEATURE_ENG</div>
+        <div class="wf-desc">Registers Feature Views in the Feature Store. Creates <code>CUSTOMER</code> entity with join key <code>CUSTOMER_ID</code>. Configurable refresh intervals via Dynamic Tables. <span class="badge badge-spcs">SPCS</span></div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num">2</div>
+        <div class="wf-title">TRAIN_MODEL</div>
+        <div class="wf-desc">Joins Feature View with <code>RAW_TRANSACTIONS</code> for labels. Trains XGBClassifier (200 trees, 5-fold CV). Logs to Experiment Tracking. Saves artifacts to stage. <span class="badge badge-spcs">SPCS</span></div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num">3</div>
+        <div class="wf-title">EVALUATE</div>
+        <div class="wf-desc">Reads metrics from <code>PIPELINE_RESULTS</code>. Marks pipeline as <code>READY_FOR_REVIEW</code>. Quality gate runs downstream in CI (not inside the DAG). <span class="badge badge-spcs">SPCS</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Key Components</h3>
+  <table>
+    <thead><tr><th>SDK Class</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>DAG</code></td><td>Container for the task graph; defines root task name and warehouse</td></tr>
+      <tr><td><code>DAGTask</code></td><td>Individual task (step) within the DAG</td></tr>
+      <tr><td><code>DAGOperation</code></td><td>Operations on the DAG: deploy, run, get status</td></tr>
+      <tr><td><code>StoredProcedureCall</code></td><td>Warehouse-mode task definition (SQL/Python sproc)</td></tr>
+      <tr><td><code>@remote</code></td><td>ML Job definition (runs on compute pool via SPCS)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Configurable Compute Per Step</h3>
+  <p>Each pipeline step can run on either a <strong>warehouse</strong> <span class="badge badge-wh">WH</span> or a <strong>compute pool</strong> <span class="badge badge-spcs">SPCS</span>, configured via <code>source/config.py</code>:</p>
+
+  <pre><code class="language-python">PIPELINE_CONFIG = {
+    "feature_engineering_compute": "spcs",   # "warehouse" or "spcs"
+    "training_compute": "spcs",
+    "evaluation_compute": "spcs",
+    ...
+}</code></pre>
+
+  <table>
+    <thead><tr><th>Mode</th><th>When to Use</th><th>Implementation</th></tr></thead>
+    <tbody>
+      <tr><td><span class="badge badge-spcs">SPCS</span></td><td>GPU training, custom packages, heavy compute</td><td><code>DAGTask(definition=@remote_func)</code></td></tr>
+      <tr><td><span class="badge badge-wh">WH</span></td><td>SQL-heavy, lightweight Python, cost-sensitive</td><td><code>DAGTask(definition=StoredProcedureCall(...))</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>DAG Definition Pattern</h3>
+  <pre><code class="language-python">from snowflake.core.task.dagv1 import DAG, DAGOperation, DAGTask
+from snowflake.ml.jobs import remote
+
+# Build @remote-decorated functions (ML Jobs)
+fe_func = build_feature_eng_remote(cfg)
+train_func = build_train_model_remote(cfg)
+eval_func = build_evaluate_remote(cfg)
+
+# Define DAG with dependency chain
+with DAG("ML_TRAINING_PIPELINE", warehouse=wh) as dag:
+    fe_task = DAGTask("FEATURE_ENG", definition=fe_func)
+    train_task = DAGTask("TRAIN_MODEL", definition=train_func)
+    eval_task = DAGTask("EVALUATE", definition=eval_func)
+    fe_task >> train_task >> eval_task
+
+# Deploy to Snowflake
+schema_ref = root.databases[db].schemas[schema]
+dag_op = DAGOperation(schema_ref)
+dag_op.deploy(dag, mode=CreateMode.or_replace)</code></pre>
+
+  <h3>Task Naming Convention</h3>
+  <p>The Python SDK prefixes child task names with the DAG name:</p>
+  <ul>
+    <li>Root: <code>ML_TRAINING_PIPELINE</code></li>
+    <li>Children: <code>ML_TRAINING_PIPELINE$FEATURE_ENG</code>, <code>ML_TRAINING_PIPELINE$TRAIN_MODEL</code>, <code>ML_TRAINING_PIPELINE$EVALUATE</code></li>
+  </ul>
+
+  <h3>CLI Usage</h3>
+  <pre><code class="language-python"># Deploy the DAG (creates/replaces tasks)
+python source/pipeline/ml_pipeline_dag.py --deploy --env stage
+
+# Execute (triggers the root task)
+python source/pipeline/ml_pipeline_dag.py --execute --env stage
+
+# Show recent task history
+python source/pipeline/ml_pipeline_dag.py --status --env stage</code></pre>
+
+
+  <h2 id="feature-store">Feature Store</h2>
+
+  <p>Features are managed via Snowflake's native <strong>Feature Store</strong> with Dynamic Tables for automatic refresh. The feature engineering step registers entities and feature views, then materializes 5000 rows of customer risk features.</p>
+
+  <h3>Feature View: CUSTOMER_RISK_FEATURES</h3>
+  <table>
+    <thead><tr><th>Feature</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>TOTAL_TXN_COUNT</td><td>INT</td><td>Total transaction count</td></tr>
+      <tr><td>AVG_TXN_AMOUNT</td><td>FLOAT</td><td>Average transaction amount</td></tr>
+      <tr><td>MAX_TXN_AMOUNT</td><td>FLOAT</td><td>Maximum transaction amount</td></tr>
+      <tr><td>STDDEV_TXN_AMOUNT</td><td>FLOAT</td><td>Standard deviation of amounts</td></tr>
+      <tr><td>UNIQUE_MERCHANTS</td><td>INT</td><td>Number of unique merchants</td></tr>
+      <tr><td>HISTORICAL_FRAUD_COUNT</td><td>INT</td><td>Past fraud incidents</td></tr>
+      <tr><td>HISTORICAL_FRAUD_RATE</td><td>FLOAT</td><td>Historical fraud rate</td></tr>
+      <tr><td>ACTIVE_DAYS</td><td>INT</td><td>Days with activity</td></tr>
+      <tr><td>LATE_NIGHT_TXN_RATIO</td><td>FLOAT</td><td>Ratio of late-night transactions</td></tr>
+      <tr><td>CREDIT_SCORE</td><td>INT</td><td>Customer credit score</td></tr>
+      <tr><td>ACCOUNT_AGE_DAYS</td><td>INT</td><td>Account age in days</td></tr>
+      <tr><td>ANNUAL_INCOME</td><td>FLOAT</td><td>Annual income</td></tr>
+    </tbody>
+  </table>
+
+  <p>Join key: <code>CUSTOMER_ID</code>. Version: <code>V1</code> (bump when feature SQL changes).</p>
+
+  <h3>Feature View: TRANSACTION_CONTEXT_FEATURES</h3>
+  <table>
+    <thead><tr><th>Feature</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>AMOUNT_TO_AVG_RATIO</td><td>FLOAT</td><td>Transaction amount relative to customer average</td></tr>
+      <tr><td>IS_HIGH_RISK_MERCHANT</td><td>BOOLEAN</td><td>Whether merchant is flagged as high-risk</td></tr>
+      <tr><td>MERCHANT_RISK_SCORE</td><td>FLOAT</td><td>Risk score assigned to the merchant</td></tr>
+      <tr><td>HOUR_OF_DAY</td><td>INT</td><td>Hour when the transaction occurred (0-23)</td></tr>
+      <tr><td>IS_WEEKEND</td><td>BOOLEAN</td><td>Whether transaction occurred on a weekend</td></tr>
+      <tr><td>IS_LATE_NIGHT</td><td>BOOLEAN</td><td>Whether transaction occurred between 11PM-5AM</td></tr>
+      <tr><td>DEVICE_TYPE</td><td>VARCHAR</td><td>Device used for the transaction</td></tr>
+      <tr><td>MERCHANT_CATEGORY</td><td>VARCHAR</td><td>Merchant category code</td></tr>
+    </tbody>
+  </table>
+
+  <p>Join key: <code>TXN_ID</code> (entity: <code>TRANSACTION</code>). Provides per-transaction context features that complement the customer-level aggregates above.</p>
+
+  <h3>Refresh Strategy</h3>
+  <p>Both feature views use configurable refresh intervals via <code>FEATURE_VIEW_CONFIG</code>:</p>
+  <pre><code class="language-python">FEATURE_VIEW_CONFIG = {
+    "customer_features_refresh": "1 hour",
+    "transaction_features_refresh": "1 hour",
+}</code></pre>
+  <p>Dynamic Tables automatically refresh on this cadence, ensuring features are fresh without manual intervention.</p>
+
+
+  <h2 id="model-training">Model Training</h2>
+
+  <p>Training runs as an <strong>ML Job</strong> on a compute pool using the <code>@remote</code> decorator from <code>snowflake.ml.jobs</code>. The function is serialized via <code>cloudpickle</code> and executed in an isolated container.</p>
+
+  <h3>Training Function Pattern</h3>
+  <pre><code class="language-python">@remote(
+    pool_name,
+    stage_name="@DB.SCHEMA.PIPELINE_STAGE",
+    pip_requirements=["xgboost", "scikit-learn", "snowflake-ml-python"],
+)
+def train_model() -> str:
+    import json                          # MUST be inside for cloudpickle
+    import numpy as np
+    import xgboost as xgb
+    from snowflake.snowpark import Session as _Session
+
+    session = _Session.builder.getOrCreate()
+    # ... load data, train, evaluate, save artifacts
+    return json.dumps(result)</code></pre>
+
+  <div class="note">
+    <strong>Important: cloudpickle Serialization Rules</strong>
+    <p>All imports MUST be inside the <code>@remote</code> function body. Module references from outer scope may not serialize correctly. Closure variables (strings, dicts) are captured fine.</p>
+  </div>
+
+  <h3>Training Details</h3>
+  <ul>
+    <li><strong>Algorithm:</strong> XGBoost (<code>XGBClassifier</code>)</li>
+    <li><strong>Validation:</strong> 5-fold stratified cross-validation</li>
+    <li><strong>Class imbalance:</strong> <code>scale_pos_weight=33</code> (~3% fraud rate)</li>
+    <li><strong>Artifacts saved to stage:</strong> <code>model.ubj</code>, <code>sample_input.json</code></li>
+    <li><strong>Metrics written to:</strong> <code>PIPELINE_RESULTS</code> table</li>
+  </ul>
+
+  <h3>SQL for Results Table</h3>
+  <pre><code class="language-sql">-- PARSE_JSON() not allowed in VALUES clause; use INSERT...SELECT
+INSERT INTO DB.SCHEMA.PIPELINE_RESULTS (STEP, STATUS, RESULT, CREATED_AT)
+SELECT 'training', 'SUCCESS', PARSE_JSON('{"metrics": {...}}'), CURRENT_TIMESTAMP()</code></pre>
+
+
+  <h2 id="model-registry">Model Registry</h2>
+
+  <p>After training passes the quality gate, the model is registered in Snowflake's Model Registry with auto-incremented versioning.</p>
+
+  <h3>Registration Flow</h3>
+  <ol>
+    <li>Download <code>model.ubj</code> from <code>PIPELINE_STAGE/artifacts/</code></li>
+    <li>Load model into XGBClassifier</li>
+    <li>Query existing versions: <code>SHOW VERSIONS IN MODEL ...</code></li>
+    <li>Auto-increment: V11 &rarr; V12</li>
+    <li>Register with <code>conda_dependencies=["xgboost==3.3.0", "scikit-learn"]</code></li>
+    <li>Set as DEFAULT version</li>
+  </ol>
+
+  <div class="note">
+    <strong>Conda Version Pinning</strong>
+    <p>The <code>conda_dependencies</code> must reference versions available in Snowflake's Anaconda channel. Pin to a specific version (e.g., <code>xgboost==3.3.0</code>) rather than relying on automatic resolution which may pick an unavailable version.</p>
+  </div>
+
+  <h3>Quality Gate Thresholds</h3>
+  <table>
+    <thead><tr><th>Metric</th><th>Threshold</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td>AUC-ROC</td><td>&ge; 0.60</td><td>Discriminative power</td></tr>
+      <tr><td>Precision</td><td>&ge; 0.03</td><td>False positive control</td></tr>
+      <tr><td>Recall</td><td>&ge; 0.30</td><td>Fraud detection coverage</td></tr>
+    </tbody>
+  </table>
+
+  <p>If any threshold fails, the workflow exits with code 1 and the model is not registered.</p>
+
+
+  <h2 id="inference">Inference</h2>
+
+  <h3>Batch Inference</h3>
+  <p>Batch inference scores the entire Feature View table using the <strong>default model version</strong> from the Model Registry. It runs on a <strong>warehouse</strong> (no SPCS service needed) and writes predictions to an output table.</p>
+
+  <h4>Architecture</h4>
+  <div class="workflow-diagram">
+    <div class="wf-row">
+      <div class="wf-card">
+        <div class="wf-num" style="background: #11567F;">1</div>
+        <div class="wf-title">Feature View Table</div>
+        <div class="wf-desc"><code>CUSTOMER_RISK_FEATURES$V1</code> &mdash; 12 feature columns, full table as input DataFrame</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num" style="background: #11567F;">2</div>
+        <div class="wf-title">Model Registry</div>
+        <div class="wf-desc"><code>MLOPS_FRAUD_DETECTOR.default</code> &mdash; <code>mv.run(input_df, "predict_proba")</code> on warehouse compute</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num" style="background: #11567F;">3</div>
+        <div class="wf-title">Output Table</div>
+        <div class="wf-desc"><code>BATCH_PREDICTIONS</code> &mdash; all input features + <code>output_feature_0</code>, <code>output_feature_1</code>, <code>PREDICTION_TS</code></div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num" style="background: #11567F;">4</div>
+        <div class="wf-title">Validation</div>
+        <div class="wf-desc">No NULL predictions, P(class0) + P(class1) &approx; 1.0, row count matches input</div>
+      </div>
+    </div>
+  </div>
+
+  <h4>When It Runs</h4>
+  <table>
+    <thead><tr><th>CI/CD Stage</th><th>Environment</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td>deploy-stage (step 5)</td><td>STAGE</td><td>Validate newly registered model works</td></tr>
+      <tr><td>deploy-prod (step 2)</td><td>PROD</td><td>Validate model runs correctly in PROD</td></tr>
+    </tbody>
+  </table>
+
+  <h4>Code Pattern</h4>
+  <pre><code class="language-python">from snowflake.ml.registry import Registry
+
+reg = Registry(session, database_name="SNOW_MLOPS_PROD", schema_name="ML")
+model = reg.get_model("MLOPS_FRAUD_DETECTOR")
+mv = model.default                              # Current DEFAULT version (e.g., V12)
+
+input_df = session.table('DB.SCHEMA."CUSTOMER_RISK_FEATURES$V1"')
+predictions_df = mv.run(input_df, function_name="predict_proba")
+
+predictions_df.write.mode("overwrite").save_as_table("BATCH_PREDICTIONS")</code></pre>
+
+  <h4>Output Schema</h4>
+  <table>
+    <thead><tr><th>Column</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><em>(all input features)</em></td><td>-</td><td>Passed through from input</td></tr>
+      <tr><td><code>output_feature_0</code></td><td>FLOAT</td><td>P(legitimate) — probability of class 0</td></tr>
+      <tr><td><code>output_feature_1</code></td><td>FLOAT</td><td>P(fraud) — probability of class 1</td></tr>
+    </tbody>
+  </table>
+
+  <h4>Validation Checks</h4>
+  <ul>
+    <li><strong>No NULLs:</strong> If any prediction is NULL, the model failed to score that row (exit code 1)</li>
+    <li><strong>Probability sanity:</strong> P(class0) + P(class1) must be within 0.01 of 1.0</li>
+  </ul>
+
+  <h4>How It Works Under the Hood</h4>
+  <p>When the model was registered with <code>conda_dependencies=["xgboost==3.3.0", "scikit-learn"]</code>, Snowflake created a <strong>vectorized Python UDF</strong> backed by the serialized model. <code>mv.run()</code> invokes that UDF over the input DataFrame — all computation stays inside the warehouse, no data leaves Snowflake, no SPCS service needed.</p>
+
+  <h4>Files</h4>
+  <table>
+    <thead><tr><th>File</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><code>scripts/run_batch_inference.py</code></td><td>CI entry point: orchestrates scoring + validation</td></tr>
+      <tr><td><code>source/serving/batch_inference.py</code></td><td>Core logic: <code>run_batch_inference()</code> and <code>validate_predictions()</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Real-Time Inference (SPCS + Gateway)</h3>
+  <p>The latest model version is deployed as a <strong>containerized SPCS service</strong> behind a <strong>Snowflake Gateway</strong> for HTTP access. Uses a <strong>blue/green deployment</strong> strategy for zero-downtime rollouts.</p>
+
+  <h4>Architecture</h4>
+  <div class="workflow-diagram">
+    <div class="wf-row">
+      <div class="wf-card">
+        <div class="wf-num" style="background: #249EDB;">1</div>
+        <div class="wf-title">Model Registry</div>
+        <div class="wf-desc"><code>MLOPS_FRAUD_DETECTOR</code> default version &rarr; <code>mv.create_service()</code> builds container image</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num" style="background: #249EDB;">2</div>
+        <div class="wf-title">SPCS Compute Pool</div>
+        <div class="wf-desc">New versioned service: <code>..._SERVICE_V12</code>. XGBoost model loaded, REST endpoint at <code>/inference</code></div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num" style="background: #249EDB;">3</div>
+        <div class="wf-title">Health Check</div>
+        <div class="wf-desc">Test prediction via <code>mv.run(sample, service_name=...)</code>. Validates output columns and probability sums.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num" style="background: #249EDB;">4</div>
+        <div class="wf-title">Gateway Traffic Shift</div>
+        <div class="wf-desc"><code>ALTER GATEWAY</code> shifts 100% traffic to new service. Drop old service. Zero-downtime rollout.</div>
+      </div>
+    </div>
+  </div>
+
+  <h4>Blue/Green Deployment Flow (6 steps)</h4>
+  <table>
+    <thead><tr><th>Step</th><th>Action</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Get latest model version</td><td><code>SHOW MODELS</code> &rarr; reads <code>default_version_name</code> (e.g., V12)</td></tr>
+      <tr><td>2</td><td>Determine service names</td><td>New: <code>MLOPS_FRAUD_DETECTOR_SERVICE_V12</code>, Old: <code>..._V11</code></td></tr>
+      <tr><td>3</td><td>Create new versioned service</td><td><code>mv.create_service()</code> &mdash; builds container image on compute pool</td></tr>
+      <tr><td>4</td><td>Wait for READY</td><td>Polls <code>SYSTEM$GET_SERVICE_STATUS()</code> every 15s, up to 10 min</td></tr>
+      <tr><td>5</td><td>Health check</td><td>Test prediction via <code>mv.run(sample, service_name=...)</code></td></tr>
+      <tr><td>6</td><td>Shift traffic + cleanup</td><td><code>ALTER GATEWAY</code> &rarr; 100% to new service, then <code>DROP SERVICE</code> old</td></tr>
+    </tbody>
+  </table>
+
+  <h4>Service Creation</h4>
+  <pre><code class="language-python">from snowflake.ml.registry import Registry
+
+reg = Registry(session, database_name="SNOW_MLOPS_PROD", schema_name="ML")
+mv = reg.get_model("MLOPS_FRAUD_DETECTOR").version("V12")
+
+mv.create_service(
+    service_name="MLOPS_FRAUD_DETECTOR_SERVICE_V12",
+    service_compute_pool="SNOW_MLOPS_PROD_POOL",
+    image_build_compute_pool="SNOW_MLOPS_PROD_POOL",
+    ingress_enabled=True,
+    max_instances=2,
+)</code></pre>
+
+  <h4>Health Check</h4>
+  <p>Before shifting traffic, a test prediction is sent directly to the new service:</p>
+  <pre><code class="language-python"># Targets the new service specifically (bypasses gateway)
+result = mv.run(sample_df, function_name="predict_proba",
+                service_name="MLOPS_FRAUD_DETECTOR_SERVICE_V12")
+
+# Validates:
+# - output_feature_0 and output_feature_1 columns exist
+# - Probabilities sum to ~1.0 (within 0.01 tolerance)</code></pre>
+
+  <h4>Gateway Traffic Shift</h4>
+  <pre><code class="language-sql">ALTER GATEWAY SNOW_MLOPS_PROD.ML.FRAUD_DETECTOR_GATEWAY
+FROM SPECIFICATION $$
+  spec:
+    type: traffic_split
+    split_type: custom
+    targets:
+      - type: endpoint
+        value: SNOW_MLOPS_PROD.ML.MLOPS_FRAUD_DETECTOR_SERVICE_V12!inference
+        weight: 100
+$$</code></pre>
+
+  <h4>Gateway Access</h4>
+  <pre><code class="language-sql">-- Get the gateway URL
+DESC GATEWAY SNOW_MLOPS_PROD.ML.FRAUD_DETECTOR_GATEWAY
+-- Returns: ingress_url (e.g., https://&lt;hash&gt;.snowflakecomputing.app)</code></pre>
+
+  <h4>Key Details</h4>
+  <table>
+    <thead><tr><th>Aspect</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Compute</td><td>SPCS (<code>SNOW_MLOPS_PROD_POOL</code>, CPU_X64_M, 1-3 nodes)</td></tr>
+      <tr><td>Service naming</td><td><code>MLOPS_FRAUD_DETECTOR_SERVICE_{VERSION}</code></td></tr>
+      <tr><td>Container build time</td><td>~2-5 min (image built on compute pool)</td></tr>
+      <tr><td>Max instances</td><td>2 (auto-scales)</td></tr>
+      <tr><td>Zero downtime</td><td>Old service stays live until new is READY + health-checked</td></tr>
+      <tr><td>Cleanup</td><td>Old service dropped after gateway traffic shifts</td></tr>
+      <tr><td>READY timeout</td><td>10 minutes (configurable)</td></tr>
+      <tr><td>File</td><td><code>scripts/deploy_prod_service.py</code></td></tr>
+    </tbody>
+  </table>
+
+  <h4>Rollback</h4>
+  <p>If the real-time service has issues after deployment, the <code>rollback.yml</code> workflow:</p>
+  <ol>
+    <li>Sets model DEFAULT back to previous version (e.g., V11)</li>
+    <li>Runs <code>deploy_prod_service.py</code> again &rarr; creates <code>_V11</code> service, shifts gateway back</li>
+    <li>Drops the broken <code>_V12</code> service</li>
+  </ol>
+
+
+  <h2 id="cicd">CI/CD Pipeline</h2>
+
+  <h3>Workflows Overview</h3>
+  <table>
+    <thead><tr><th>Workflow</th><th>Trigger</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>pr-checks.yml</code></td><td>PR to <code>main</code></td><td>Lint + unit tests (must pass before merge)</td></tr>
+      <tr><td><code>deploy.yml</code></td><td>Push to <code>main</code> or manual dispatch</td><td>Full pipeline: train &rarr; promote &rarr; deploy to PROD</td></tr>
+      <tr><td><code>scheduled-retrain.yml</code></td><td>Weekly cron (Mon 6AM PT) or manual dispatch</td><td>Retrain on fresh data, register candidate in STAGE only</td></tr>
+      <tr><td><code>rollback.yml</code></td><td>Manual dispatch</td><td>Revert PROD to a previous model version</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Two Promotion Paths</h3>
+  <table>
+    <thead><tr><th>Path</th><th>When</th><th>What Happens</th><th>PROD Approval</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Code Promotion</strong></td><td>Push to <code>main</code> (new features, hyperparams, pipeline changes)</td><td>lint &rarr; test &rarr; deploy-stage (train+register+promote) &rarr; deploy-prod</td><td>Required (PROD environment reviewer)</td></tr>
+      <tr><td><strong>Candidate Promotion</strong></td><td>Manual dispatch with <code>promote_only=true</code> (after reviewing scheduled retrain candidate)</td><td>lint &rarr; test &rarr; <em>skip stage</em> &rarr; deploy-prod directly</td><td>Required (PROD environment reviewer)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Approval Flow</h3>
+  <p>Every PROD deployment requires explicit human approval via the <strong>GitHub Environment protection rule</strong> on the <code>PROD</code> environment:</p>
+  <div class="workflow-diagram">
+    <div class="wf-row">
+      <div class="wf-card">
+        <div class="wf-num">1</div>
+        <div class="wf-title">deploy-stage completes</div>
+        <div class="wf-desc">Pipeline trains, evaluates, and registers model in STAGE. Or skipped entirely if <code>promote_only=true</code>.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card" style="border: 2px dashed light-dark(#E8A317, #92700c);">
+        <div class="wf-num" style="background: #E8A317;">2</div>
+        <div class="wf-title">Waiting for Review</div>
+        <div class="wf-desc">deploy-prod pauses. Reviewer sees metrics in the Job Summary or GitHub Issue. Actions &rarr; Review deployments &rarr; Approve.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num" style="background: #11567F;">3</div>
+        <div class="wf-title">deploy-prod runs</div>
+        <div class="wf-desc">Replicate model &rarr; Feature Views &rarr; Batch inference &rarr; SPCS blue/green &rarr; Gateway shift &rarr; Monitor setup &rarr; Git tag.</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Workflow: deploy.yml (Main Pipeline)</h3>
+  <table>
+    <thead><tr><th>Job</th><th>Steps</th><th>Environment</th></tr></thead>
+    <tbody>
+      <tr><td><strong>lint</strong></td><td>ruff check + format check</td><td>-</td></tr>
+      <tr><td><strong>test</strong></td><td>pytest (unit tests only)</td><td>-</td></tr>
+      <tr><td><strong>deploy-stage</strong></td><td>Deploy DAG &rarr; Execute &rarr; Wait &rarr; Quality gate &rarr; Register &rarr; Batch inference</td><td>STAGE</td></tr>
+      <tr><td><strong>deploy-prod</strong></td><td>Feature Views &rarr; Batch inference &rarr; SPCS deploy &rarr; Monitor setup &rarr; Gateway verify &rarr; Tag release</td><td>PROD (approval required)</td></tr>
+    </tbody>
+  </table>
+  <p><strong>Manual dispatch inputs:</strong></p>
+  <ul>
+    <li><code>promote_only</code> (boolean) &mdash; skip training, go straight to PROD deployment</li>
+    <li><code>reason</code> (string) &mdash; why this was triggered manually</li>
+  </ul>
+
+  <h3>Workflow: scheduled-retrain.yml (Periodic Retraining)</h3>
+  <p>Trains a new model on fresh data without promoting to PROD. Creates a GitHub Issue so a human can review and approve.</p>
+  <table>
+    <thead><tr><th>Step</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Deploy Task DAG (with <code>RESUME_SCHEDULE=true</code> to enable cron)</td></tr>
+      <tr><td>2</td><td>Trigger pipeline (FEATURE_ENG &rarr; TRAIN &rarr; EVALUATE)</td></tr>
+      <tr><td>3</td><td>Wait for ML Jobs to complete</td></tr>
+      <tr><td>4</td><td>Quality gate + register (<code>STAGE_ONLY=true</code> &mdash; does NOT promote to PROD)</td></tr>
+      <tr><td>5</td><td>Create GitHub Issue: "Model Candidate Ready: V2" with metrics table</td></tr>
+    </tbody>
+  </table>
+  <p><strong>To promote the candidate:</strong></p>
+  <ol>
+    <li>Review the GitHub Issue (metrics, version)</li>
+    <li>Go to Actions &rarr; Deploy &rarr; Run workflow &rarr; check <code>promote_only: true</code></li>
+    <li>Approve the PROD deployment when prompted</li>
+  </ol>
+
+  <h3>Authentication</h3>
+  <p>CI uses <strong>OIDC workload identity</strong> (zero secrets stored in GitHub). The Snowflake CLI action handles token exchange automatically.</p>
+  <table>
+    <thead><tr><th>Environment</th><th>Service User</th></tr></thead>
+    <tbody>
+      <tr><td>STAGE</td><td><code>SVC_GITHUB_ACTIONS_STAGE</code></td></tr>
+      <tr><td>PROD</td><td><code>SVC_GITHUB_ACTIONS</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Release Tagging</h3>
+  <p>On successful PROD deployment, the workflow creates a git tag via GitHub API:</p>
+  <pre><code class="language-bash">prod/{MODEL_VERSION}-{YYYYMMDD}-{HHMMSS}
+# Example: prod/V1-20260812-031500</code></pre>
+  <p>This tag corresponds 1:1 with the model version set as DEFAULT in the PROD Model Registry.</p>
+
+
+  <h2 id="rollback">Rollback</h2>
+
+  <p>The <code>rollback.yml</code> workflow enables manual rollback to any previous model version.</p>
+
+  <h3>Inputs</h3>
+  <table>
+    <thead><tr><th>Input</th><th>Required</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td><code>model_version</code></td><td>Yes</td><td>V11</td></tr>
+      <tr><td><code>reason</code></td><td>Yes</td><td>Regression in precision metric</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Rollback Steps</h3>
+  <ol>
+    <li>Set DEFAULT version: <code>ALTER MODEL ... SET DEFAULT_VERSION = 'V11'</code></li>
+    <li>Redeploy SPCS service with rolled-back model</li>
+    <li>Validate gateway endpoint responds correctly</li>
+    <li>Tag rollback: <code>rollback/V11-{timestamp}</code></li>
+  </ol>
+
+  <h3>Trigger</h3>
+  <p>GitHub Actions &rarr; Rollback workflow &rarr; Run workflow (manual dispatch)</p>
+
+
+  <h2 id="rbac">RBAC &amp; Security</h2>
+
+  <h3>Role Hierarchy</h3>
+  <pre><code class="language-plaintext">ACCOUNTADMIN
+  └── MLOPS_DEPLOY_ROLE
+        ├── USAGE on SNOW_MLOPS_DEV / STAGE / PROD
+        ├── USAGE on compute pools and warehouses
+        ├── CREATE MODEL, CREATE SERVICE, CREATE TASK
+        ├── OPERATE on tasks
+        └── Owns: models, services, gateways, stages</code></pre>
+
+  <h3>Branch Protection</h3>
+  <ul>
+    <li><code>main</code> branch: requires PR with passing <code>lint</code> + <code>test</code> checks</li>
+    <li><code>enforce_admins: true</code> &mdash; rules apply to all users including admins</li>
+    <li>Only <code>feature/*</code> branches can be merged to <code>main</code></li>
+  </ul>
+
+  <h3>Network Policy</h3>
+  <p>Service users are restricted to GitHub Actions IP ranges via a Snowflake network policy attached at the user level.</p>
+
+
+  <h2 id="monitoring">Model Monitoring</h2>
+
+  <p>Snowflake <a href="https://docs.snowflake.com/developer-guide/snowflake-ml/model-registry/model-observability">ML Observability</a> tracks prediction drift and feature distribution shifts in production. This framework sets up a <code>MODEL MONITOR</code> during PROD deployment that continuously evaluates model health.</p>
+
+  <h3>Data Flow</h3>
+  <div class="workflow-diagram">
+    <div class="wf-row">
+      <div class="wf-card">
+        <div class="wf-num">1</div>
+        <div class="wf-title">Batch Inference</div>
+        <div class="wf-desc">Scores production data. Writes predictions + <code>PREDICTION_TS</code> timestamp to <code>BATCH_PREDICTIONS</code> table.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num">2</div>
+        <div class="wf-title">Model Monitor</div>
+        <div class="wf-desc">Reads <code>BATCH_PREDICTIONS</code> on a daily refresh. Aggregates over a 7-day sliding window using <code>PREDICTION_TS</code>.</div>
+      </div>
+      <div class="wf-arrow">&rarr;</div>
+      <div class="wf-card">
+        <div class="wf-num">3</div>
+        <div class="wf-title">Drift Metrics</div>
+        <div class="wf-desc">Produces distribution statistics for prediction columns. Detects shifts vs. baseline training distribution.</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Monitor Configuration</h3>
+  <pre><code class="language-python">MONITOR_CONFIG = {
+    "monitor_name": "FRAUD_DETECTOR_MONITOR",
+    "function_name": "predict_proba",          # Model function being monitored
+    "source_table": "BATCH_PREDICTIONS",       # Table written by batch inference
+    "timestamp_column": "PREDICTION_TS",       # Links to batch inference output
+    "prediction_columns": ["output_feature_1"],# Columns to track drift on
+    "refresh_interval": "1 day",               # How often the monitor refreshes
+    "aggregation_window": "7 days",            # Sliding window for aggregation
+}</code></pre>
+
+  <h3>Lifecycle</h3>
+  <table>
+    <thead><tr><th>Operation</th><th>When</th><th>What Happens</th></tr></thead>
+    <tbody>
+      <tr><td>Create</td><td>deploy-prod (if <code>ENABLE_MODEL_MONITOR=true</code>)</td><td><code>CREATE MODEL MONITOR</code> with config above</td></tr>
+      <tr><td>Version tracking</td><td>Each PROD deployment</td><td>If model version changed, drops and recreates the monitor</td></tr>
+      <tr><td>Validate (STAGE)</td><td>deploy-stage</td><td>Creates monitor &rarr; verifies ACTIVE state &rarr; drops it (proves PROD will work)</td></tr>
+      <tr><td>Suspend / Resume</td><td>Manual</td><td><code>suspend_monitor()</code> / <code>resume_monitor()</code> for cost control</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Real-Time Inference Monitoring</h3>
+  <p>For SPCS services, the <code>autocapture=True</code> parameter on <code>mv.create_service()</code> enables automatic logging of all inference requests and responses. Query captured data with <code>INFERENCE_TABLE()</code>.</p>
+
+
+  <h2 id="experiment-tracking">Experiment Tracking</h2>
+
+  <p><a href="https://docs.snowflake.com/developer-guide/snowflake-ml/experiments">Snowflake Experiments</a> record training run parameters and metrics so you can compare models and select the best candidate for production.</p>
+
+  <h3>API Pattern</h3>
+  <pre><code class="language-python">from snowflake.ml.experiment import ExperimentTracking
+
+exp = ExperimentTracking(session=session, database_name=db, schema_name=schema)
+exp.set_experiment("FRAUD_DETECTION_TRAINING")
+
+run_name = f"pipeline_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+with exp.start_run(run_name):
+    exp.log_params({"n_estimators": 200, "max_depth": 6, "learning_rate": 0.1})
+    exp.log_params({"feature_view": "V1", "dataset_rows": "5000"})
+    exp.log_metrics({"auc_roc": 0.94, "f1_score": 0.82, "precision": 0.85})</code></pre>
+
+  <h3>Key Constraints</h3>
+  <ul>
+    <li><code>log_metrics()</code> only accepts numeric values (int/float). Filter non-numeric keys before calling.</li>
+    <li><code>log_params()</code> accepts any string value — use it for metadata like feature view names, dataset sizes.</li>
+    <li>Runs inside <code>@remote</code> functions (ML Jobs) — experiment tracking works from compute pools.</li>
+    <li>Controlled by <code>EXPERIMENT_CONFIG["enabled"]</code> — can be toggled off without code changes.</li>
+  </ul>
+
+  <h3>Configuration</h3>
+  <pre><code class="language-python">EXPERIMENT_CONFIG = {
+    "enabled": "true",
+    "experiment_name": "FRAUD_DETECTION_TRAINING",
+    "run_name_prefix": "pipeline",
+}</code></pre>
+
+
+  <h2 id="config">Configuration</h2>
+
+  <p>All pipeline configuration is centralized in <code>source/config.py</code>:</p>
+
+  <pre><code class="language-python"># Target environment
+DATABASE = "SNOW_MLOPS_DEV"
+SCHEMA = "ML"
+WAREHOUSE = "SNOW_MLOPS_DEV_WH"
+COMPUTE_POOL = "SNOW_MLOPS_DEV_POOL"
+
+# Source data (always PROD)
+SOURCE_DATABASE = "SNOW_MLOPS_PROD"
+SOURCE_SCHEMA = "ML"
+
+# Pipeline configuration
+PIPELINE_CONFIG = {
+    # Compute mode per step: "warehouse" or "spcs"
+    "feature_engineering_compute": "spcs",
+    "training_compute": "spcs",
+    "evaluation_compute": "spcs",
+
+    # Task timeout (max: 86400000 = 24h)
+    "task_timeout_ms": "7200000",  # 2 hours
+
+    # Deployment toggles
+    "deploy_batch_inference": "true",
+    "deploy_realtime_service": "true",
+    "enable_model_monitor": "true",
+}
+
+# Experiment Tracking
+EXPERIMENT_CONFIG = {
+    "enabled": "true",
+    "experiment_name": "FRAUD_DETECTION_TRAINING",
+    "run_name_prefix": "pipeline",
+}
+
+# Feature View refresh intervals
+FEATURE_VIEW_CONFIG = {
+    "customer_features_refresh": "1 hour",
+    "transaction_features_refresh": "1 hour",
+}
+
+# Model Monitor
+MONITOR_CONFIG = {
+    "monitor_name": "FRAUD_DETECTOR_MONITOR",
+    "refresh_interval": "1 day",
+    "aggregation_window": "7 days",
+    "prediction_columns": ["output_feature_1"],
+}
+
+# Scheduled Retraining
+RETRAIN_CONFIG = {
+    "enabled": "true",
+    "schedule": "USING CRON 0 6 * * MON America/Los_Angeles",
+    "stage_only": "true",
+    "notify_github_issue": "true",
+}
+
+# Quality gate thresholds
+MIN_AUC_ROC = 0.60
+MIN_PRECISION = 0.03
+MIN_RECALL = 0.30</code></pre>
+
+  <h3>Environment Overrides</h3>
+  <p>The CI workflow overrides database/warehouse/pool per environment via environment variables. The <code>ml_pipeline_dag.py</code> script reads <code>--env stage</code> to select the correct config:</p>
+  <pre><code class="language-python">ENV_CONFIG = {
+    "dev":   {"database": "SNOW_MLOPS_DEV",   "warehouse": "SNOW_MLOPS_DEV_WH",   ...},
+    "stage": {"database": "SNOW_MLOPS_STAGE", "warehouse": "SNOW_MLOPS_STAGE_WH", ...},
+}</code></pre>
+
+  <h3>Adding a New Pipeline Step</h3>
+  <ol>
+    <li>Add compute mode to <code>PIPELINE_CONFIG</code>: <code>"new_step_compute": "spcs"</code></li>
+    <li>Create a <code>build_new_step_remote(cfg)</code> function in <code>ml_pipeline_dag.py</code></li>
+    <li>Add <code>DAGTask("NEW_STEP", definition=func)</code> to the DAG</li>
+    <li>Wire dependencies: <code>eval_task >> new_task</code></li>
+  </ol>
+
+  <script src="/libs/highlight.js@11.10.0/highlight.min.js"></script>
+  <script>
+    (function() {
+      var pyKw = /\b(from|import|as|def|class|return|if|elif|else|for|while|with|try|except|finally|raise|pass|yield|lambda|and|or|not|in|is|None|True|False|self|async|await)\b/g;
+      var sqlKw = /\b(SELECT|FROM|WHERE|INSERT|INTO|UPDATE|DELETE|CREATE|ALTER|DROP|TABLE|VIEW|INDEX|GRANT|REVOKE|SHOW|DESC|DESCRIBE|SET|USE|DATABASE|SCHEMA|WAREHOUSE|GATEWAY|SERVICE|MODEL|MONITOR|TASK|VALUES|AS|ON|TO|WITH|USING|CRON|AND|OR|NOT|IN|EXISTS|JOIN|LEFT|RIGHT|INNER|OUTER|GROUP|BY|ORDER|HAVING|LIMIT|UNION|ALL|CASE|WHEN|THEN|END|ELSE|IS|NULL|LIKE|BETWEEN|CURRENT_TIMESTAMP|PARSE_JSON|SPECIFICATION|TYPE|SPLIT_TYPE|TARGETS|WEIGHT|ENDPOINT|SPEC)\b/gi;
+      var strings = /(["'])(?:(?!\1|\\).|\\.)*?\1/g;
+      var comments = /(#[^\n]*|--[^\n]*)/g;
+      var decorators = /(@\w+)/g;
+      var numbers = /\b(\d+\.?\d*)\b/g;
+      var functions = /\b(\w+)\s*(?=\()/g;
+
+      function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+      document.querySelectorAll('pre code[class*="language-"]').forEach(function(block) {
+        var lang = block.className.match(/language-(\w+)/);
+        if (!lang) return;
+        lang = lang[1];
+        if (lang === 'plaintext' || lang === 'bash') return;
+
+        var text = block.textContent;
+        var tokens = [];
+        var re, m;
+
+        // Extract strings first
+        re = new RegExp(strings.source, 'g');
+        while ((m = re.exec(text)) !== null) tokens.push({s:m.index, e:re.lastIndex, cls:'hl-str'});
+        // Comments
+        re = new RegExp(comments.source, 'g');
+        while ((m = re.exec(text)) !== null) tokens.push({s:m.index, e:re.lastIndex, cls:'hl-cm'});
+        // Decorators (Python)
+        if (lang === 'python') {
+          re = new RegExp(decorators.source, 'g');
+          while ((m = re.exec(text)) !== null) tokens.push({s:m.index, e:re.lastIndex, cls:'hl-dec'});
+        }
+
+        // Sort by position, longer matches win ties
+        tokens.sort(function(a,b) { return a.s - b.s || b.e - a.e; });
+        // Remove overlaps
+        var filtered = []; var last = 0;
+        tokens.forEach(function(t) { if (t.s >= last) { filtered.push(t); last = t.e; } });
+
+        // Build output with protected regions
+        var out = ''; var pos = 0;
+        filtered.forEach(function(t) {
+          var before = text.slice(pos, t.s);
+          // Highlight keywords in unprotected text
+          before = highlightKw(before, lang);
+          out += before + '<span class="' + t.cls + '">' + esc(text.slice(t.s, t.e)) + '</span>';
+          pos = t.e;
+        });
+        out += highlightKw(text.slice(pos), lang);
+        block.innerHTML = out;
+      });
+
+      function highlightKw(txt, lang) {
+        var escaped = esc(txt);
+        if (lang === 'python') {
+          escaped = escaped.replace(pyKw, '<span class="hl-kw">$1</span>');
+          escaped = escaped.replace(/\b(\w+)\s*(?=\()/g, '<span class="hl-fn">$1</span>');
+        } else if (lang === 'sql') {
+          escaped = escaped.replace(sqlKw, '<span class="hl-kw">$&</span>');
+        }
+        escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="hl-num">$1</span>');
+        return escaped;
+      }
+    })();
+  </script>
+  <a href="#top" class="back-to-top" title="Back to top">&uarr;</a>
+</body>
+</html>

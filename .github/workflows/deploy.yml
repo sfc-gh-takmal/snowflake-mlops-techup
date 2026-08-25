@@ -1,0 +1,223 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'LICENSE'
+  workflow_dispatch:
+    inputs:
+      promote_only:
+        description: 'Skip training, promote existing STAGE candidate to PROD'
+        type: boolean
+        default: false
+      reason:
+        description: 'Reason for manual trigger (e.g., promote candidate, fresh data retrain)'
+        required: false
+
+permissions:
+  id-token: write
+  contents: write
+  issues: write
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────
+  # LINT: Code quality checks (runs in parallel with tests)
+  # ──────────────────────────────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint (ruff)
+        run: uv run ruff check source/ scripts/
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check source/ scripts/
+
+  # ──────────────────────────────────────────────────────────────────────
+  # TEST: Unit tests (runs in parallel with lint)
+  # ──────────────────────────────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run unit tests
+        run: uv run pytest tests/ -v --ignore=tests/test_endpoint.py
+
+  # ──────────────────────────────────────────────────────────────────────
+  # STAGE: Train, validate, replicate model to PROD registry
+  # Skipped when promote_only=true (candidate already in STAGE)
+  # ──────────────────────────────────────────────────────────────────────
+  deploy-stage:
+    needs: [lint, test]
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.promote_only) }}
+    runs-on: ubuntu-latest
+    environment: STAGE
+    env:
+      SNOWFLAKE_DATABASE: ${{ vars.SNOWFLAKE_DATABASE_STAGE }}
+      SNOWFLAKE_SCHEMA: ${{ vars.SNOWFLAKE_SCHEMA }}
+      SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER_STAGE }}
+      SNOWFLAKE_ROLE: MLOPS_DEPLOY_ROLE
+      TOPOLOGY: ${{ vars.TOPOLOGY || 'single-account' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Snowflake CLI
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Test Snowflake Connection
+        run: snow connection test -x
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group snow --no-default-groups
+
+      - name: Deploy Task DAG (creates stage + results table + tasks)
+        run: uv run python source/pipeline/ml_pipeline_dag.py --deploy --env stage
+
+      - name: Trigger ML training pipeline
+        run: uv run python source/pipeline/ml_pipeline_dag.py --execute --env stage
+
+      - name: Wait for training pipeline completion
+        run: uv run python scripts/wait_for_task.py
+        timeout-minutes: 30
+        env:
+          METRICS_FILE: ${{ runner.temp }}/pipeline_metrics.json
+
+      - name: "Quality gate: evaluate metrics"
+        run: uv run python scripts/quality_gate_and_register.py
+        timeout-minutes: 10
+        env:
+          METRICS_FILE: ${{ runner.temp }}/pipeline_metrics.json
+
+      - name: Run batch inference (validate)
+        run: uv run python scripts/run_batch_inference.py
+        timeout-minutes: 10
+
+      - name: "Validate model monitor (create, verify, drop)"
+        if: vars.ENABLE_MODEL_MONITOR == 'true'
+        run: uv run python scripts/setup_model_monitor.py --env stage --validate-only
+        timeout-minutes: 5
+
+  # ──────────────────────────────────────────────────────────────────────
+  # PROD: Model deployment (requires approval)
+  # Gated by: PROD environment requires reviewer approval
+  # When promote_only=true, deploy-stage is skipped so we use always() to allow running
+  # ──────────────────────────────────────────────────────────────────────
+  deploy-prod:
+    needs: deploy-stage
+    if: ${{ always() && (needs.deploy-stage.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.promote_only)) }}
+    runs-on: ubuntu-latest
+    environment: PROD
+    env:
+      SNOWFLAKE_DATABASE: ${{ vars.SNOWFLAKE_DATABASE_PROD }}
+      SNOWFLAKE_SCHEMA: ${{ vars.SNOWFLAKE_SCHEMA }}
+      SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER_PROD }}
+      SNOWFLAKE_ROLE: MLOPS_DEPLOY_ROLE
+      TOPOLOGY: ${{ vars.TOPOLOGY || 'single-account' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Snowflake CLI
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Test Snowflake Connection
+        run: snow connection test -x
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group snow --no-default-groups
+
+      - name: "Promote model to PROD (replicate from STAGE)"
+        run: |
+          uv run python -c "
+          import sys; sys.path.insert(0, 'source')
+          from snowpark_session import create_snowpark_session
+          from config import MODEL_NAME
+          import os, importlib
+          session = create_snowpark_session()
+          session.sql('USE WAREHOUSE SNOW_MLOPS_PROD_WH').collect()
+          # Get latest version from STAGE
+          rows = session.sql(\"SHOW VERSIONS IN MODEL SNOW_MLOPS_STAGE.ML.\" + MODEL_NAME).collect()
+          versions = [r['name'] for r in rows if r['name'].startswith('V') and r['name'][1:].isdigit()]
+          latest = f'V{max(int(v[1:]) for v in versions)}'
+          print(f'Promoting {MODEL_NAME}/{latest} from STAGE to PROD...')
+          sys.path.insert(0, '.')
+          topology = os.getenv('TOPOLOGY', 'single-account')
+          module = importlib.import_module(f'deploy.strategies.{topology.replace(\"-\", \"_\")}')
+          module.promote(version=latest, session=session)
+          print(f'Model {MODEL_NAME}/{latest} replicated to PROD.')
+          session.close()
+          "
+        timeout-minutes: 5
+
+      - name: Register Feature Views in PROD
+        run: uv run python -c "import sys; sys.path.insert(0, 'source'); from features.feature_views import register_feature_views; from snowpark_session import create_snowpark_session; session = create_snowpark_session(); register_feature_views(session=session, database='SNOW_MLOPS_PROD', schema='ML', warehouse='SNOW_MLOPS_PROD_WH'); session.close()"
+        timeout-minutes: 5
+
+      - name: "Deploy batch inference (validate model.run())"
+        run: uv run python scripts/run_batch_inference.py
+        timeout-minutes: 10
+
+      - name: "Deploy real-time service (SPCS blue/green)"
+        run: uv run python scripts/deploy_prod_service.py
+        timeout-minutes: 20
+
+      - name: Verify gateway endpoint
+        run: |
+          snow sql -q "DESC GATEWAY SNOW_MLOPS_PROD.ML.FRAUD_DETECTOR_GATEWAY" -x
+
+      - name: Set up model monitor
+        if: vars.ENABLE_MODEL_MONITOR == 'true'
+        run: uv run python scripts/setup_model_monitor.py --env prod
+        timeout-minutes: 5
+
+      - name: Tag production release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MODEL_VERSION=$(snow sql -q "SHOW MODELS LIKE 'MLOPS_FRAUD_DETECTOR' IN SNOW_MLOPS_PROD.ML" --format json -x | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['default_version_name'])" 2>/dev/null || echo "unknown")
+          TAG="prod/${MODEL_VERSION}-$(date +%Y%m%d-%H%M%S)"
+          gh api repos/${{ github.repository }}/git/refs -f ref="refs/tags/${TAG}" -f sha="${GITHUB_SHA}"
+          echo "Tagged release: $TAG"

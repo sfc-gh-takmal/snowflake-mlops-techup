@@ -1,0 +1,158 @@
+#!/bin/bash
+# Infrastructure setup for Snowflake MLOps Framework
+# Creates DEV, STAGE, and PROD environments
+#
+# Run as ACCOUNTADMIN (needed for compute pools and account-level grants).
+# DEV_ROLE is the role your connections.toml uses for interactive work and for
+# the notebooks; it is granted write access to everything created here.
+#
+# Usage: SNOWFLAKE_DEFAULT_CONNECTION_NAME=$YOUR_CONNECTION bash scripts/setup.sh
+#        DEV_ROLE=MY_ROLE bash scripts/setup.sh
+
+set -euo pipefail
+
+DEV_ROLE="${DEV_ROLE:-SYSADMIN}"
+
+echo "=== Setting up Snowflake MLOps infrastructure (DEV + STAGE + PROD) ==="
+echo "  Interactive dev role to be granted access: ${DEV_ROLE}"
+
+snow sql -q "
+-- =============================================================================
+-- DEV Environment
+-- =============================================================================
+CREATE DATABASE IF NOT EXISTS SNOW_MLOPS_DEV;
+CREATE SCHEMA IF NOT EXISTS SNOW_MLOPS_DEV.ML;
+
+CREATE WAREHOUSE IF NOT EXISTS SNOW_MLOPS_DEV_WH
+    WAREHOUSE_SIZE = 'MEDIUM'
+    AUTO_SUSPEND = 120
+    AUTO_RESUME = TRUE
+    INITIALLY_SUSPENDED = TRUE;
+
+CREATE COMPUTE POOL IF NOT EXISTS SNOW_MLOPS_DEV_POOL
+    MIN_NODES = 1
+    MAX_NODES = 3
+    INSTANCE_FAMILY = CPU_X64_M
+    AUTO_SUSPEND_SECS = 300
+    AUTO_RESUME = TRUE;
+
+USE SCHEMA SNOW_MLOPS_DEV.ML;
+CREATE STAGE IF NOT EXISTS ML_ARTIFACTS ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+CREATE STAGE IF NOT EXISTS DAG_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+CREATE STAGE IF NOT EXISTS JOB_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+-- PIPELINE_STAGE holds serialized ML Job code + model artifacts for the Task DAG
+CREATE STAGE IF NOT EXISTS PIPELINE_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+
+-- =============================================================================
+-- STAGE Environment
+-- =============================================================================
+CREATE DATABASE IF NOT EXISTS SNOW_MLOPS_STAGE;
+CREATE SCHEMA IF NOT EXISTS SNOW_MLOPS_STAGE.ML;
+
+CREATE WAREHOUSE IF NOT EXISTS SNOW_MLOPS_STAGE_WH
+    WAREHOUSE_SIZE = 'MEDIUM'
+    AUTO_SUSPEND = 120
+    AUTO_RESUME = TRUE
+    INITIALLY_SUSPENDED = TRUE;
+
+CREATE COMPUTE POOL IF NOT EXISTS SNOW_MLOPS_STAGE_POOL
+    MIN_NODES = 1
+    MAX_NODES = 3
+    INSTANCE_FAMILY = CPU_X64_M
+    AUTO_SUSPEND_SECS = 300
+    AUTO_RESUME = TRUE;
+
+USE SCHEMA SNOW_MLOPS_STAGE.ML;
+CREATE STAGE IF NOT EXISTS ML_ARTIFACTS ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+CREATE STAGE IF NOT EXISTS DAG_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+CREATE STAGE IF NOT EXISTS JOB_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+-- PIPELINE_STAGE holds serialized ML Job code + model artifacts for the Task DAG
+CREATE STAGE IF NOT EXISTS PIPELINE_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+
+-- =============================================================================
+-- PROD Environment
+-- =============================================================================
+CREATE DATABASE IF NOT EXISTS SNOW_MLOPS_PROD;
+CREATE SCHEMA IF NOT EXISTS SNOW_MLOPS_PROD.ML;
+
+CREATE WAREHOUSE IF NOT EXISTS SNOW_MLOPS_PROD_WH
+    WAREHOUSE_SIZE = 'MEDIUM'
+    AUTO_SUSPEND = 120
+    AUTO_RESUME = TRUE
+    INITIALLY_SUSPENDED = TRUE;
+
+CREATE COMPUTE POOL IF NOT EXISTS SNOW_MLOPS_PROD_POOL
+    MIN_NODES = 1
+    MAX_NODES = 3
+    INSTANCE_FAMILY = CPU_X64_M
+    AUTO_SUSPEND_SECS = 300
+    AUTO_RESUME = TRUE;
+
+USE SCHEMA SNOW_MLOPS_PROD.ML;
+CREATE STAGE IF NOT EXISTS ML_ARTIFACTS ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+CREATE STAGE IF NOT EXISTS DAG_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+CREATE STAGE IF NOT EXISTS JOB_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+-- PIPELINE_STAGE holds serialized ML Job code + model artifacts for the Task DAG
+CREATE STAGE IF NOT EXISTS PIPELINE_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+
+-- =============================================================================
+-- Account-level grants
+-- =============================================================================
+GRANT EXECUTE TASK ON ACCOUNT TO ROLE ACCOUNTADMIN;
+GRANT EXECUTE MANAGED TASK ON ACCOUNT TO ROLE ACCOUNTADMIN;
+GRANT BIND SERVICE ENDPOINT ON ACCOUNT TO ROLE ACCOUNTADMIN;
+
+-- =============================================================================
+-- Grants for the interactive dev role (\$DEV_ROLE, default SYSADMIN)
+--
+-- This script runs as ACCOUNTADMIN, so everything above is owned by ACCOUNTADMIN.
+-- Without these grants the role used by connections.toml (typically SYSADMIN)
+-- cannot create tables, and generate_dataset.py / the notebooks fail with
+-- 'Insufficient privileges to operate on schema ML'.
+-- =============================================================================
+GRANT USAGE ON DATABASE SNOW_MLOPS_DEV TO ROLE ${DEV_ROLE};
+GRANT USAGE ON DATABASE SNOW_MLOPS_STAGE TO ROLE ${DEV_ROLE};
+GRANT USAGE ON DATABASE SNOW_MLOPS_PROD TO ROLE ${DEV_ROLE};
+
+GRANT ALL ON SCHEMA SNOW_MLOPS_DEV.ML TO ROLE ${DEV_ROLE};
+GRANT ALL ON SCHEMA SNOW_MLOPS_STAGE.ML TO ROLE ${DEV_ROLE};
+GRANT ALL ON SCHEMA SNOW_MLOPS_PROD.ML TO ROLE ${DEV_ROLE};
+
+GRANT ALL ON ALL STAGES IN SCHEMA SNOW_MLOPS_DEV.ML TO ROLE ${DEV_ROLE};
+GRANT ALL ON ALL STAGES IN SCHEMA SNOW_MLOPS_STAGE.ML TO ROLE ${DEV_ROLE};
+GRANT ALL ON ALL STAGES IN SCHEMA SNOW_MLOPS_PROD.ML TO ROLE ${DEV_ROLE};
+GRANT ALL ON FUTURE STAGES IN SCHEMA SNOW_MLOPS_DEV.ML TO ROLE ${DEV_ROLE};
+GRANT ALL ON FUTURE STAGES IN SCHEMA SNOW_MLOPS_STAGE.ML TO ROLE ${DEV_ROLE};
+GRANT ALL ON FUTURE STAGES IN SCHEMA SNOW_MLOPS_PROD.ML TO ROLE ${DEV_ROLE};
+
+GRANT USAGE ON WAREHOUSE SNOW_MLOPS_DEV_WH TO ROLE ${DEV_ROLE};
+GRANT USAGE ON WAREHOUSE SNOW_MLOPS_STAGE_WH TO ROLE ${DEV_ROLE};
+GRANT USAGE ON WAREHOUSE SNOW_MLOPS_PROD_WH TO ROLE ${DEV_ROLE};
+GRANT USAGE, MONITOR ON COMPUTE POOL SNOW_MLOPS_DEV_POOL TO ROLE ${DEV_ROLE};
+GRANT USAGE, MONITOR ON COMPUTE POOL SNOW_MLOPS_STAGE_POOL TO ROLE ${DEV_ROLE};
+GRANT USAGE, MONITOR ON COMPUTE POOL SNOW_MLOPS_PROD_POOL TO ROLE ${DEV_ROLE};
+
+GRANT EXECUTE TASK ON ACCOUNT TO ROLE ${DEV_ROLE};
+GRANT EXECUTE MANAGED TASK ON ACCOUNT TO ROLE ${DEV_ROLE};
+GRANT BIND SERVICE ENDPOINT ON ACCOUNT TO ROLE ${DEV_ROLE};
+"
+
+echo ""
+echo "=== Infrastructure setup complete ==="
+echo ""
+echo "DEV:"
+echo "  Database:      SNOW_MLOPS_DEV"
+echo "  Warehouse:     SNOW_MLOPS_DEV_WH"
+echo "  Compute Pool:  SNOW_MLOPS_DEV_POOL"
+echo ""
+echo "STAGE:"
+echo "  Database:      SNOW_MLOPS_STAGE"
+echo "  Warehouse:     SNOW_MLOPS_STAGE_WH"
+echo "  Compute Pool:  SNOW_MLOPS_STAGE_POOL"
+echo ""
+echo "PROD:"
+echo "  Database:      SNOW_MLOPS_PROD"
+echo "  Warehouse:     SNOW_MLOPS_PROD_WH"
+echo "  Compute Pool:  SNOW_MLOPS_PROD_POOL"
+echo ""
+echo "Stages (all):    ML_ARTIFACTS, DAG_STAGE, JOB_STAGE"

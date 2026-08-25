@@ -1,0 +1,112 @@
+name: Rollback PROD
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_version:
+        description: 'Model version to roll back to (e.g., V4)'
+        required: true
+      reason:
+        description: 'Reason for rollback'
+        required: true
+
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: PROD
+    env:
+      SNOWFLAKE_DATABASE: ${{ vars.SNOWFLAKE_DATABASE_PROD }}
+      SNOWFLAKE_SCHEMA: ${{ vars.SNOWFLAKE_SCHEMA }}
+      SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER_PROD }}
+      SNOWFLAKE_ROLE: MLOPS_DEPLOY_ROLE
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Snowflake CLI
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Test Snowflake Connection
+        run: snow connection test -x
+
+      - name: Validate and verify target version
+        env:
+          MODEL_VERSION: ${{ inputs.model_version }}
+        run: |
+          set -euo pipefail
+
+          # Never interpolate workflow input straight into SQL or a shell command.
+          # Pass it via env and constrain the shape before it is used anywhere.
+          if ! [[ "$MODEL_VERSION" =~ ^V[0-9]+$ ]]; then
+            echo "::error::Invalid model_version '$MODEL_VERSION'. Expected V<number>, e.g. V3."
+            exit 1
+          fi
+
+          # The old version of this step only printed the list. Actually assert
+          # the requested version exists before we repoint PROD at it.
+          snow sql -q "SHOW VERSIONS IN MODEL SNOW_MLOPS_PROD.ML.MLOPS_FRAUD_DETECTOR" \
+            --format json > versions.json
+          AVAILABLE=$(python3 -c 'import json;print(" ".join(r["name"] for r in json.load(open("versions.json"))))')
+          echo "Available versions: ${AVAILABLE}"
+          if ! grep -qw -- "$MODEL_VERSION" <<<"$AVAILABLE"; then
+            echo "::error::Version $MODEL_VERSION does not exist in SNOW_MLOPS_PROD.ML.MLOPS_FRAUD_DETECTOR"
+            exit 1
+          fi
+
+          echo "MODEL_VERSION=$MODEL_VERSION" >> "$GITHUB_ENV"
+          echo "Validated rollback target: $MODEL_VERSION"
+
+      - name: Set model default version
+        run: |
+          set -euo pipefail
+          snow sql -q "ALTER MODEL SNOW_MLOPS_PROD.ML.MLOPS_FRAUD_DETECTOR SET DEFAULT_VERSION = ${MODEL_VERSION}" -x
+          echo "Model default version set to ${MODEL_VERSION}"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group snow --no-default-groups
+
+      - name: Deploy SPCS service for rolled-back version
+        run: uv run python scripts/deploy_prod_service.py
+        timeout-minutes: 20
+
+      - name: Run batch inference (validate rollback)
+        run: uv run python scripts/run_batch_inference.py
+        timeout-minutes: 10
+
+      - name: Tag rollback
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          TAG="prod/${MODEL_VERSION}-rollback-$(date +%Y%m%d-%H%M%S)"
+          git tag "$TAG" -m "ROLLBACK to ${MODEL_VERSION}: ${REASON}"
+          git push origin "$TAG"
+          echo "Tagged: $TAG"
+
+      - name: Summary
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          {
+            echo "## Rollback Complete"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Rolled back to | \`${MODEL_VERSION}\` |"
+            echo "| Reason | ${REASON} |"
+            echo "| Triggered by | ${{ github.actor }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

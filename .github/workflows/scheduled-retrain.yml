@@ -1,0 +1,72 @@
+name: Scheduled Retrain
+
+on:
+  schedule:
+    - cron: '0 13 * * 1'  # Every Monday 6AM PT (13:00 UTC)
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual retrain'
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    environment: STAGE
+    env:
+      SNOWFLAKE_DATABASE: ${{ vars.SNOWFLAKE_DATABASE_STAGE }}
+      SNOWFLAKE_SCHEMA: ${{ vars.SNOWFLAKE_SCHEMA }}
+      SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER_STAGE }}
+      SNOWFLAKE_ROLE: MLOPS_DEPLOY_ROLE
+      STAGE_ONLY: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Snowflake CLI
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group snow --no-default-groups
+
+      - name: Deploy Task DAG (ensures schedule is set)
+        run: uv run python source/pipeline/ml_pipeline_dag.py --deploy --env stage
+        env:
+          RESUME_SCHEDULE: 'true'
+
+      - name: Trigger ML training pipeline
+        run: uv run python source/pipeline/ml_pipeline_dag.py --execute --env stage
+
+      - name: Wait for training pipeline completion
+        run: uv run python scripts/wait_for_task.py
+        timeout-minutes: 30
+        env:
+          METRICS_FILE: ${{ runner.temp }}/pipeline_metrics.json
+
+      - name: "Quality gate + register (STAGE only)"
+        run: uv run python scripts/quality_gate_and_register.py
+        timeout-minutes: 10
+        env:
+          METRICS_FILE: ${{ runner.temp }}/pipeline_metrics.json
+          STAGE_ONLY: 'true'
+
+      - name: Notify candidate ready (GitHub issue)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline_metrics.json
+        run: uv run python scripts/notify_candidate.py

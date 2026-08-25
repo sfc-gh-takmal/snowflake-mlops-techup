@@ -1,0 +1,37 @@
+[project]
+name = "snowflake-mlops"
+version = "0.1.0"
+description = "End-to-end MLOps pipeline on Snowflake: Feature Store, ML Jobs, Model Registry, SPCS Inference"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "llvmlite>=0.48.0",
+    "snowflake-ml-python>=1.47.0",
+    # Pinned to the newest version in Snowflake's Anaconda channel. The registry
+    # logs the model with conda_dependencies=["xgboost==3.3.0"], so the version
+    # that loads and re-serializes the artifact must match or inference can skew.
+    "xgboost==3.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11.0",
+    "pytest>=8.0",
+]
+snow = [
+    "snowflake-snowpark-python>=1.53.1",
+    "snowflake-ml-python>=1.47.0",
+    "snowflake>=1.0.0",
+    "xgboost==3.3.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E402", "E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
