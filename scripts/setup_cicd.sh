@@ -225,7 +225,6 @@ ALTER USER ${SERVICE_USER_STAGE} SET WORKLOAD_IDENTITY = (
 
 GRANT ROLE MLOPS_DEPLOY_ROLE TO USER ${SERVICE_USER_STAGE};
 ALTER USER ${SERVICE_USER_STAGE} SET NETWORK_POLICY = 'GITHUB_ACTIONS_POLICY';
-ALTER USER ${SERVICE_USER_STAGE} SET AUTHENTICATION POLICY ${AUTH_POLICY};
 
 -- =============================================================================
 -- Step 5: PROD Service User (gated by the PROD environment reviewer)
@@ -248,11 +247,69 @@ ALTER USER ${SERVICE_USER_PROD} SET WORKLOAD_IDENTITY = (
 
 GRANT ROLE MLOPS_DEPLOY_ROLE TO USER ${SERVICE_USER_PROD};
 ALTER USER ${SERVICE_USER_PROD} SET NETWORK_POLICY = 'GITHUB_ACTIONS_POLICY';
-ALTER USER ${SERVICE_USER_PROD} SET AUTHENTICATION POLICY ${AUTH_POLICY};
 "
 
 echo ""
 echo "=== Snowflake CI/CD access configured ==="
+
+# =============================================================================
+# Step 5a: Attach the authentication policy
+#
+# A user can hold only one AUTHENTICATION POLICY, and SET fails outright if one is
+# already attached -- so this is not idempotent inline and has to UNSET first.
+# UNSET is tolerated failing when nothing is attached (first run).
+# =============================================================================
+echo ""
+echo "=== Attaching authentication policy ==="
+for svc_user in "$SERVICE_USER_STAGE" "$SERVICE_USER_PROD"; do
+    snow sql -q "ALTER USER ${svc_user} UNSET AUTHENTICATION POLICY" >/dev/null 2>&1 || true
+    if snow sql -q "ALTER USER ${svc_user} SET AUTHENTICATION POLICY ${AUTH_POLICY}" >/dev/null 2>&1; then
+        echo "  ${svc_user} -> ${AUTH_POLICY}"
+    else
+        echo "  ERROR: failed to attach ${AUTH_POLICY} to ${svc_user}" >&2
+        echo "         OIDC logins will be rejected if an account-level policy omits" >&2
+        echo "         WORKLOAD_IDENTITY. Investigate before running CI." >&2
+        exit 1
+    fi
+done
+
+# =============================================================================
+# Step 5b: APPLY on Feature Store tags
+#
+# The Feature Store stamps metadata tags onto each feature-view dynamic table
+# (SNOWML_FEATURE_STORE_OBJECT, SNOWML_FEATURE_VIEW_METADATA,
+# SNOWML_FEATURE_STORE_ENTITY_<ENTITY>). Re-registering a feature view re-applies
+# them, so the CI role needs APPLY on every one or the job fails with:
+#   Insufficient privileges to operate on tag 'SNOWML_FEATURE_VIEW_METADATA'
+#
+# There is no bulk "GRANT APPLY ON ALL TAGS IN SCHEMA" form, so the tags have to be
+# enumerated and granted individually. Entity tag names depend on the entities
+# defined, so discover them rather than hardcoding.
+# =============================================================================
+echo ""
+echo "=== Granting APPLY on Feature Store tags ==="
+
+for db in SNOW_MLOPS_DEV SNOW_MLOPS_STAGE SNOW_MLOPS_PROD; do
+    tags=$(snow sql -q "SHOW TAGS IN SCHEMA ${db}.ML" --format json 2>/dev/null |
+        python3 -c 'import json,sys
+try:
+    rows = json.load(sys.stdin)
+except Exception:
+    rows = []
+print("\n".join(r["name"] for r in rows))' 2>/dev/null)
+
+    if [[ -z "$tags" ]]; then
+        echo "  ${db}.ML: no tags yet (CI will create and own them)"
+        continue
+    fi
+
+    while IFS= read -r tag; do
+        [[ -z "$tag" ]] && continue
+        snow sql -q "GRANT APPLY ON TAG ${db}.ML.\"${tag}\" TO ROLE MLOPS_DEPLOY_ROLE" >/dev/null 2>&1 &&
+            echo "  APPLY granted: ${db}.ML.${tag}" ||
+            echo "  WARNING: could not grant APPLY on ${db}.ML.${tag}" >&2
+    done <<< "$tags"
+done
 
 # =============================================================================
 # Step 6: GitHub repo variables
