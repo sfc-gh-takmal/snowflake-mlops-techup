@@ -3,10 +3,11 @@ name: PR Checks
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - 'LICENSE'
+    # Deliberately no paths-ignore. Branch protection requires the 'lint' and 'test'
+    # contexts, and a workflow skipped by paths-ignore reports no status at all --
+    # which makes a docs-only PR permanently unmergeable ("no checks reported").
+    # These jobs take ~20s, so always running them is cheaper than the dead end.
+    # deploy.yml keeps its paths-ignore, since docs changes need no deployment.
 
 jobs:
   lint:

@@ -346,6 +346,55 @@ FEATURE_COLUMNS = TRANSACTION_FEATURE_COLUMNS + CUSTOMER_FEATURE_COLUMNS
 
 Open `docs/docs.html` in a browser for a detailed Level 300 walkthrough covering the Task DAG, ML Jobs, Feature Store, Model Registry, inference deployment, CI/CD pipeline, monitoring, and lessons learned.
 
+## Operational notes
+
+Things that are easy to get wrong and cost a CI run each to discover.
+
+### Handing interactively-built objects to the CI role
+
+`GRANT ALL` does **not** include `OWNERSHIP`, and the pipeline uses
+`CREATE OR REPLACE` in several places. If you build the demo interactively first and
+then let CI take over, `setup_cicd.sh` transfers what it can:
+
+| Object | Needed because | Note |
+|--------|----------------|------|
+| Dynamic tables | Feature Store replaces feature views on every register | `OWNERSHIP` |
+| Views | `FRAUD_SCORING_FEATURES` is `CREATE OR REPLACE VIEW` | `OWNERSHIP` |
+| Tables | `BATCH_PREDICTIONS` written with `mode("overwrite")` | `OWNERSHIP` |
+| Tasks | DAG deployed with `CreateMode.or_replace` | must be **suspended** first |
+| Tags | Feature Store re-stamps metadata tags each register | `APPLY`, **no bulk form** |
+| Experiments | `set_experiment()` on an existing experiment | **no bulk form** |
+
+Two object types **cannot** be transferred: `TRANSFER OWNERSHIP ON SERVICE` is
+unsupported, and the same applies in practice to model monitors. A service created by
+another role can never be dropped by CI, which permanently breaks blue/green cleanup.
+`scripts/teardown.sh` drops them so CI recreates and owns them.
+
+### OIDC tokens expire mid-job
+
+`deploy-stage` takes ~10 minutes and `deploy-prod` ~12. The OIDC JWT minted when
+`snowflake-actions` runs does not survive that, and re-running the action mid-job does
+**not** reliably refresh it. `create_snowpark_session()` therefore mints a fresh token
+from `ACTIONS_ID_TOKEN_REQUEST_URL` at the moment it connects, so elapsed job time is
+irrelevant. This needs `permissions: id-token: write` on the job (already set).
+
+`scripts/verify_oidc_minting.py` exercises all three paths — no-op outside Actions,
+fresh token overriding a stale one, and graceful fallback on endpoint failure.
+
+### The approval gate
+
+GitHub does not allow approving your own pull request, so `REQUIRED_REVIEWS` defaults
+to `0` and PR review is opt-in. Direct pushes to `main` are still blocked by required
+status checks plus `enforce_admins`.
+
+The human-approval story lives on the **PROD environment reviewer gate**, which *can*
+be self-approved — so a single operator can still demonstrate it end to end. Set
+`REQUIRED_REVIEWS=1` on a repo with more than one maintainer.
+
+Note that `required_pull_request_reviews` blocks merging whenever the block is
+*present*, even with a count of `0`; it has to be `null`.
+
+
 ## License
 
 MIT
