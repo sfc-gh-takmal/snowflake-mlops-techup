@@ -312,6 +312,43 @@ print("\n".join(r["name"] for r in rows))' 2>/dev/null)
 done
 
 # =============================================================================
+# Step 5c: OWNERSHIP on Experiments
+#
+# Experiment Tracking calls set_experiment(), which fails on an experiment owned by
+# another role:
+#   Experiment 'FRAUD_DETECTION_TRAINING' already exists, but current role has no
+#   privileges on it
+#
+# As with tags there is no bulk form -- "GRANT on all objects of type EXPERIMENT"
+# returns Unsupported feature -- so enumerate and grant individually.
+# =============================================================================
+echo ""
+echo "=== Granting OWNERSHIP on Experiments ==="
+
+for db in SNOW_MLOPS_DEV SNOW_MLOPS_STAGE SNOW_MLOPS_PROD; do
+    experiments=$(snow sql -q "SHOW EXPERIMENTS IN SCHEMA ${db}.ML" --format json 2>/dev/null |
+        python3 -c 'import json,sys
+try:
+    rows = json.load(sys.stdin)
+except Exception:
+    rows = []
+print("\n".join(r["name"] for r in rows))' 2>/dev/null)
+
+    if [[ -z "$experiments" ]]; then
+        echo "  ${db}.ML: no experiments yet (CI will create and own them)"
+        continue
+    fi
+
+    while IFS= read -r exp; do
+        [[ -z "$exp" ]] && continue
+        snow sql -q "GRANT OWNERSHIP ON EXPERIMENT ${db}.ML.\"${exp}\" TO ROLE MLOPS_DEPLOY_ROLE COPY CURRENT GRANTS" \
+            >/dev/null 2>&1 &&
+            echo "  OWNERSHIP granted: ${db}.ML.${exp}" ||
+            echo "  WARNING: could not grant OWNERSHIP on experiment ${db}.ML.${exp}" >&2
+    done <<< "$experiments"
+done
+
+# =============================================================================
 # Step 6: GitHub repo variables
 # The workflows read these; nothing here is a secret (auth is keyless OIDC).
 # =============================================================================
