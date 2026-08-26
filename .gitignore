@@ -46,3 +46,6 @@ htmlcov/
 # uv
 uv.lock
 # E2E test trigger
+
+# Snowflake CLI streamlit deploy bundle
+streamlit_app/output/
