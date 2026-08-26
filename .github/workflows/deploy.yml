@@ -118,15 +118,35 @@ jobs:
         env:
           METRICS_FILE: ${{ runner.temp }}/pipeline_metrics.json
 
+      # The OIDC JWT minted at job start is short-lived, and the wait above can run
+      # for many minutes. Without re-minting, later steps fail with:
+      #   250001 (08001) ... JWT is outside its validity period
+      # Re-running the action issues a fresh token for the remaining steps.
+      - name: Refresh Snowflake OIDC token
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
       - name: "Quality gate: evaluate metrics"
         run: uv run python scripts/quality_gate_and_register.py
         timeout-minutes: 10
         env:
           METRICS_FILE: ${{ runner.temp }}/pipeline_metrics.json
 
+      - name: Refresh Snowflake OIDC token (post quality gate)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
       - name: Run batch inference (validate)
         run: uv run python scripts/run_batch_inference.py
         timeout-minutes: 10
+
+      - name: Refresh Snowflake OIDC token (post batch inference)
+        if: vars.ENABLE_MODEL_MONITOR == 'true'
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
 
       - name: "Validate model monitor (create, verify, drop)"
         if: vars.ENABLE_MODEL_MONITOR == 'true'
@@ -170,39 +190,46 @@ jobs:
         run: uv sync --group snow --no-default-groups
 
       - name: "Promote model to PROD (replicate from STAGE)"
-        run: |
-          uv run python -c "
-          import sys; sys.path.insert(0, 'source')
-          from snowpark_session import create_snowpark_session
-          from config import MODEL_NAME
-          import os, importlib
-          session = create_snowpark_session()
-          session.sql('USE WAREHOUSE SNOW_MLOPS_PROD_WH').collect()
-          # Get latest version from STAGE
-          rows = session.sql(\"SHOW VERSIONS IN MODEL SNOW_MLOPS_STAGE.ML.\" + MODEL_NAME).collect()
-          versions = [r['name'] for r in rows if r['name'].startswith('V') and r['name'][1:].isdigit()]
-          latest = f'V{max(int(v[1:]) for v in versions)}'
-          print(f'Promoting {MODEL_NAME}/{latest} from STAGE to PROD...')
-          sys.path.insert(0, '.')
-          topology = os.getenv('TOPOLOGY', 'single-account')
-          module = importlib.import_module(f'deploy.strategies.{topology.replace(\"-\", \"_\")}')
-          module.promote(version=latest, session=session)
-          print(f'Model {MODEL_NAME}/{latest} replicated to PROD.')
-          session.close()
-          "
+        run: uv run python deploy/promote.py --latest-from-stage
         timeout-minutes: 5
 
       - name: Register Feature Views in PROD
-        run: uv run python -c "import sys; sys.path.insert(0, 'source'); from features.feature_views import register_feature_views; from snowpark_session import create_snowpark_session; session = create_snowpark_session(); register_feature_views(session=session, database='SNOW_MLOPS_PROD', schema='ML', warehouse='SNOW_MLOPS_PROD_WH'); session.close()"
-        timeout-minutes: 5
+        run: |
+          uv run python -c "
+          import sys; sys.path.insert(0, 'source')
+          from features.feature_views import register_feature_views, register_scoring_view
+          from snowpark_session import create_snowpark_session
+          session = create_snowpark_session()
+          register_feature_views(session=session, database='SNOW_MLOPS_PROD', schema='ML', warehouse='SNOW_MLOPS_PROD_WH')
+          register_scoring_view(session=session, database='SNOW_MLOPS_PROD', schema='ML')
+          session.close()
+          "
+        timeout-minutes: 10
+
+      - name: Refresh Snowflake OIDC token (pre batch inference)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
 
       - name: "Deploy batch inference (validate model.run())"
         run: uv run python scripts/run_batch_inference.py
         timeout-minutes: 10
 
+      # The SPCS container build can take several minutes, so mint a fresh token
+      # before it and again afterwards for the remaining steps.
+      - name: Refresh Snowflake OIDC token (pre SPCS deploy)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
       - name: "Deploy real-time service (SPCS blue/green)"
         run: uv run python scripts/deploy_prod_service.py
-        timeout-minutes: 20
+        timeout-minutes: 30
+
+      - name: Refresh Snowflake OIDC token (post SPCS deploy)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
 
       - name: Verify gateway endpoint
         run: |

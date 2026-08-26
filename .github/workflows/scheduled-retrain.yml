@@ -58,6 +58,13 @@ jobs:
         env:
           METRICS_FILE: ${{ runner.temp }}/pipeline_metrics.json
 
+      # The OIDC JWT minted at job start is short-lived and the wait above can run
+      # for many minutes, so re-mint before the remaining Snowflake steps.
+      - name: Refresh Snowflake OIDC token
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
       - name: "Quality gate + register (STAGE only)"
         run: uv run python scripts/quality_gate_and_register.py
         timeout-minutes: 10
