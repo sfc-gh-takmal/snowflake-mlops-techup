@@ -401,31 +401,48 @@ fi
 
 # =============================================================================
 # Step 8: Branch protection
+#
+# Required status checks + enforce_admins already prevent direct pushes to main,
+# so every change must go through a PR whose lint and test checks pass.
+#
+# PR *review* approval is off by default (REQUIRED_REVIEWS=0). GitHub does not
+# allow approving your own pull request, so on a single-operator demo repo a
+# review requirement makes main unmergeable with no way to self-serve. The
+# human-approval story lives on the PROD environment reviewer gate instead,
+# which *can* be self-approved.
+#
+# Set REQUIRED_REVIEWS=1 on a repo with more than one maintainer.
+#
 # Best-effort: unavailable on some plans for private repos.
 # =============================================================================
 echo ""
 echo "=== Setting up GitHub branch protection ==="
 
-if gh api "repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/main/protection" -X PUT --input - >/dev/null 2>&1 <<'PROTECTION'
+REQUIRED_REVIEWS="${REQUIRED_REVIEWS:-0}"
+if [[ "$REQUIRED_REVIEWS" -gt 0 ]]; then
+    reviews_json="{\"required_approving_review_count\":${REQUIRED_REVIEWS},\"dismiss_stale_reviews\":true}"
+    echo "  Requiring ${REQUIRED_REVIEWS} approving review(s)"
+else
+    reviews_json="null"
+    echo "  PR reviews not required (single-operator mode; PROD environment gate still applies)"
+fi
+
+if gh api "repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/main/protection" -X PUT --input - >/dev/null 2>&1 <<PROTECTION
 {
   "required_status_checks": {
     "strict": true,
     "contexts": ["lint", "test"]
   },
   "enforce_admins": true,
-  "required_pull_request_reviews": {
-    "required_approving_review_count": 1,
-    "dismiss_stale_reviews": true
-  },
+  "required_pull_request_reviews": ${reviews_json},
   "restrictions": null,
   "allow_force_pushes": false,
   "allow_deletions": false
 }
 PROTECTION
 then
-    echo "  - PRs required to merge to main (no direct pushes, admins included)"
+    echo "  - Direct pushes to main blocked (admins included)"
     echo "  - Status checks 'lint' and 'test' must pass"
-    echo "  - 1 approving review required, stale reviews dismissed on new pushes"
     echo "  - Force pushes and branch deletion blocked"
 else
     echo "  WARNING: branch protection could not be applied (plan or permission limit)." >&2
