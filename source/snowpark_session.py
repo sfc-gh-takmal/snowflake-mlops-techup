@@ -201,6 +201,64 @@ def _resolve_token_file(config: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Main API
 # ---------------------------------------------------------------------------
+def _mint_github_oidc_token() -> Optional[str]:
+    """Request a fresh GitHub Actions OIDC token, or None if not running in Actions.
+
+    The token exported by snowflake-actions is minted once, when that step runs.
+    Long jobs (pipeline waits, SPCS container builds) outlive it, and every later
+    Snowflake connection then fails with:
+
+      250001 (08001) ... JWT is outside its validity period
+
+    Re-running the setup action mid-job did not reliably refresh it, so mint a token
+    at the moment of connection instead. Relies on `permissions: id-token: write`,
+    which exposes ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN to every step in the job.
+    """
+    request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+    request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not request_url or not request_token:
+        return None
+
+    import json as _json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    audience = os.getenv("SNOWFLAKE_AUDIENCE", "snowflakecomputing.com")
+    url = f"{request_url}&audience={urllib.parse.quote(audience, safe='')}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {request_token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            token = _json.loads(resp.read().decode()).get("value")
+        if token:
+            print("  Minted a fresh GitHub OIDC token for this connection")
+        return token
+    except (urllib.error.URLError, ValueError, KeyError) as e:
+        print(f"  Warning: could not mint a fresh OIDC token ({e}); falling back to SNOWFLAKE_TOKEN")
+        return None
+
+
+def _ci_oidc_config() -> dict:
+    """Build the Snowpark config used on the GitHub Actions OIDC path."""
+    config = {
+        "account": os.environ["SNOWFLAKE_ACCOUNT"],
+        "token": _mint_github_oidc_token() or os.environ["SNOWFLAKE_TOKEN"],
+        "authenticator": os.getenv("SNOWFLAKE_AUTHENTICATOR", "oauth"),
+    }
+    for key, env_var in (
+        ("workload_identity_provider", "SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER"),
+        ("audience", "SNOWFLAKE_AUDIENCE"),
+        ("user", "SNOWFLAKE_USER"),
+        ("database", "SNOWFLAKE_DATABASE"),
+        ("schema", "SNOWFLAKE_SCHEMA"),
+        ("warehouse", "SNOWFLAKE_WAREHOUSE"),
+        ("role", "SNOWFLAKE_ROLE"),
+    ):
+        if os.getenv(env_var):
+            config[key] = os.environ[env_var]
+    return config
+
+
 def create_snowpark_session(connection_name: Optional[str] = None) -> Session:
     """Create a Snowpark session from local Snowflake CLI config files.
 
@@ -220,26 +278,7 @@ def create_snowpark_session(connection_name: Optional[str] = None) -> Session:
     # CI/OIDC detection: if SNOWFLAKE_TOKEN and SNOWFLAKE_ACCOUNT are set,
     # we're running in GitHub Actions with snowflake-actions@v3 OIDC auth.
     if os.getenv("SNOWFLAKE_TOKEN") and os.getenv("SNOWFLAKE_ACCOUNT"):
-        config = {
-            "account": os.environ["SNOWFLAKE_ACCOUNT"],
-            "token": os.environ["SNOWFLAKE_TOKEN"],
-            "authenticator": os.getenv("SNOWFLAKE_AUTHENTICATOR", "oauth"),
-        }
-        if os.getenv("SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER"):
-            config["workload_identity_provider"] = os.environ["SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER"]
-        if os.getenv("SNOWFLAKE_AUDIENCE"):
-            config["audience"] = os.environ["SNOWFLAKE_AUDIENCE"]
-        if os.getenv("SNOWFLAKE_USER"):
-            config["user"] = os.environ["SNOWFLAKE_USER"]
-        if os.getenv("SNOWFLAKE_DATABASE"):
-            config["database"] = os.environ["SNOWFLAKE_DATABASE"]
-        if os.getenv("SNOWFLAKE_SCHEMA"):
-            config["schema"] = os.environ["SNOWFLAKE_SCHEMA"]
-        if os.getenv("SNOWFLAKE_WAREHOUSE"):
-            config["warehouse"] = os.environ["SNOWFLAKE_WAREHOUSE"]
-        if os.getenv("SNOWFLAKE_ROLE"):
-            config["role"] = os.environ["SNOWFLAKE_ROLE"]
-        return Session.builder.configs(config).create()
+        return Session.builder.configs(_ci_oidc_config()).create()
 
     snowflake_home = Path(os.environ.get("SNOWFLAKE_HOME", "~/.snowflake")).expanduser()
 
