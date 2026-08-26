@@ -1,0 +1,18 @@
+definition_version: 2
+entities:
+  control_plane:
+    type: streamlit
+    identifier:
+      name: MLOPS_CONTROL_PLANE
+      database: SNOW_MLOPS_PROD
+      schema: ML
+    query_warehouse: SNOW_MLOPS_PROD_WH
+    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
+    compute_pool: SYSTEM_COMPUTE_POOL_CPU
+    main_file: streamlit_app.py
+    # No pyproject.toml on purpose: the app imports only streamlit, pandas and
+    # altair, all pre-installed in the container runtime. Adding a dependency
+    # file would trigger PyPI resolution and require an external access
+    # integration for no benefit.
+    artifacts:
+      - streamlit_app.py
