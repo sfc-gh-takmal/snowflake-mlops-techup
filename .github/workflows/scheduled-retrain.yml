@@ -41,8 +41,11 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # --locked installs exactly what uv.lock pins and fails if the lock is stale.
+      # Without a committed lock every run re-resolved from PyPI, so an upstream
+      # release (snowflake-ml-python 2.0) broke this job on an unchanged commit.
       - name: Install dependencies
-        run: uv sync --group snow --no-default-groups
+        run: uv sync --locked --group snow --no-default-groups
 
       - name: Deploy Task DAG (ensures schedule is set)
         run: uv run python source/pipeline/ml_pipeline_dag.py --deploy --env stage

@@ -43,6 +43,4 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# uv
-uv.lock
 # E2E test trigger
