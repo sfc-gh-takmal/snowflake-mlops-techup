@@ -11,6 +11,11 @@ dependencies = [
     # logs the model with conda_dependencies=["xgboost==3.3.0"], so the version
     # that loads and re-serializes the artifact must match or inference can skew.
     "xgboost==3.3.0",
+    # Declared explicitly: snowflake-ml-python 2.0 moved scikit-learn to an optional
+    # extra, so it stopped arriving transitively and XGBClassifier() raised "sklearn
+    # needs to be installed". Pinned to the newest version in Snowflake's Anaconda
+    # channel to match the registry's conda_dependencies.
+    "scikit-learn==1.9.1",
 ]
 
 [dependency-groups]
@@ -23,6 +28,7 @@ snow = [
     "snowflake-ml-python>=1.47.0",
     "snowflake>=1.0.0",
     "xgboost==3.3.0",
+    "scikit-learn==1.9.1",
 ]
 
 [tool.ruff]

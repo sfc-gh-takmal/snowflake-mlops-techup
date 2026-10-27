@@ -41,7 +41,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
 
       - name: Lint (ruff)
         run: uv run ruff check source/ scripts/
@@ -64,7 +64,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
 
       - name: Run unit tests
         run: uv run pytest tests/ -v --ignore=tests/test_endpoint.py
@@ -104,7 +104,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --group snow --no-default-groups
+        run: uv sync --locked --group snow --no-default-groups
 
       - name: Deploy Task DAG (creates stage + results table + tasks)
         run: uv run python source/pipeline/ml_pipeline_dag.py --deploy --env stage
@@ -187,7 +187,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --group snow --no-default-groups
+        run: uv sync --locked --group snow --no-default-groups
 
       - name: "Promote model to PROD (replicate from STAGE)"
         run: uv run python deploy/promote.py --latest-from-stage
